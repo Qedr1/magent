@@ -1,0 +1,36 @@
+[sources.agent_in]
+type = "vector"
+version = "2"
+address = "0.0.0.0:6000"
+
+[transforms.flatten_rows]
+type = "remap"
+inputs = ["agent_in"]
+source = '''
+events = []
+base_event = .
+del(base_event.data)
+
+if is_object(.data) {
+  for_each(object!(.data)) -> |var_name, agg_map| {
+    if is_object(agg_map) {
+      for_each(object!(agg_map)) -> |agg_name, agg_value| {
+        event = merge(base_event, {
+          "var": var_name,
+          "agg": agg_name,
+          "value": to_int(agg_value) ?? 0
+        })
+        events = push(events, event)
+      }
+    }
+  }
+}
+
+. = events
+'''
+
+[sinks.flatten_log]
+type = "file"
+inputs = ["flatten_rows"]
+path = "./var/vector/flatten.log"
+encoding.codec = "json"

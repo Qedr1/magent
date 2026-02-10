@@ -1,0 +1,88 @@
+[global]
+dc = "${DC}"
+project = "${PROJECT}"
+role = "${ROLE}"
+host = ""
+
+[log.console]
+enabled = true
+level = "info"
+format = "line"
+
+[log.file]
+enabled = false
+level = "info"
+format = "json"
+path = "./var/log/magent.log"
+
+[metrics]
+scrape = "5s"
+send = "30s"
+percentiles = [50, 90, 99]
+
+[[metrics.cpu]]
+name = "cpu-main"
+scrape = "5s"
+send = "30s"
+
+[[metrics.ram]]
+name = "ram-main"
+scrape = "5s"
+send = "30s"
+
+[[metrics.swap]]
+name = "swap-main"
+scrape = "5s"
+send = "30s"
+
+[[metrics.net]]
+name = "net-main"
+scrape = "5s"
+send = "30s"
+# filter_var = ["rx_*", "tx_*", "speed"]
+# drop_var = ["rx_err", "tx_err", "rx_drop", "tx_drop"]
+# drop_event = ["key!=eth*"]
+
+[[metrics.disk]]
+name = "disk-main"
+scrape = "5s"
+send = "30s"
+
+[[metrics.fs]]
+name = "fs-main"
+scrape = "10s"
+send = "30s"
+
+[[metrics.process]]
+name = "process-main"
+scrape = "5s"
+send = "30s"
+cpu_util = 10
+ram_util = 5
+# iops = 100
+# drop_event = ["iops>10000","key!=*postgres*"]
+
+# [[metrics.script.db]]
+# name = "script-db-main"
+# scrape = "5s"
+# send = "30s"
+# path = "./scripts/db-metric.sh"
+# timeout = "5s"
+# env = { DB_DSN = "${DB_DSN}" }
+# filter_var = ["conn_*", "util"]
+
+[[collector]]
+name = "primary"
+addr = ["127.0.0.1:6000", "127.0.0.1:6001"]
+timeout = "5s"
+retry_interval = "3s"
+
+[collector.batch]
+max_events = 200
+max_age = "5s"
+
+[collector.queue]
+enabled = false
+dir = "./var/queue/primary"
+max_events = 100000
+max_age = "24h"

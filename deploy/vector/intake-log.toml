@@ -1,0 +1,10 @@
+[sources.agent_in]
+type = "vector"
+version = "2"
+address = "0.0.0.0:6000"
+
+[sinks.agent_in_log]
+type = "file"
+inputs = ["agent_in"]
+path = "./var/vector/intake.log"
+encoding.codec = "json"
