@@ -17,6 +17,11 @@ const (
 	defaultCollectorBatchN = 200
 	defaultCollectorBatchA = 5 * time.Second
 	defaultScriptTimeout   = 5 * time.Second
+	defaultDBHost          = "127.0.0.1"
+	defaultDBPort          = 8123
+	defaultDBName          = "metrics"
+	defaultDBUser          = "default"
+	defaultDBDialTimeout   = 5 * time.Second
 )
 
 // Duration wraps time.Duration for TOML parsing.
@@ -53,6 +58,27 @@ type Config struct {
 	Log       LogConfig         `toml:"log"`
 	Metrics   MetricsConfig     `toml:"metrics"`
 	Collector []CollectorConfig `toml:"collector"`
+	DB        DBConfig          `toml:"db"`
+}
+
+// DBConfig contains database connectivity settings used by deploy/e2e tooling.
+// Params: nested database driver sections.
+// Returns: db connection options.
+type DBConfig struct {
+	ClickHouse ClickHouseConfig `toml:"clickhouse"`
+}
+
+// ClickHouseConfig contains ClickHouse connection options.
+// Params: host/port/db/user/password and transport settings.
+// Returns: clickhouse endpoint credentials.
+type ClickHouseConfig struct {
+	Host        string   `toml:"host"`
+	Port        uint16   `toml:"port"`
+	Database    string   `toml:"database"`
+	User        string   `toml:"user"`
+	Password    string   `toml:"password"`
+	Secure      bool     `toml:"secure"`
+	DialTimeout Duration `toml:"dial_timeout"`
 }
 
 // GlobalConfig contains required shared tags.
@@ -238,6 +264,22 @@ func (c *Config) applyDefaults() error {
 		}
 	}
 
+	if strings.TrimSpace(c.DB.ClickHouse.Host) == "" {
+		c.DB.ClickHouse.Host = defaultDBHost
+	}
+	if c.DB.ClickHouse.Port == 0 {
+		c.DB.ClickHouse.Port = defaultDBPort
+	}
+	if strings.TrimSpace(c.DB.ClickHouse.Database) == "" {
+		c.DB.ClickHouse.Database = defaultDBName
+	}
+	if strings.TrimSpace(c.DB.ClickHouse.User) == "" {
+		c.DB.ClickHouse.User = defaultDBUser
+	}
+	if c.DB.ClickHouse.DialTimeout.Duration <= 0 {
+		c.DB.ClickHouse.DialTimeout.Duration = defaultDBDialTimeout
+	}
+
 	for scriptName := range c.Metrics.Script {
 		workers := c.Metrics.Script[scriptName]
 		for idx := range workers {
@@ -275,6 +317,9 @@ func (c *Config) validate() error {
 		return err
 	}
 	if err := validateSink("log.file", c.Log.File, true); err != nil {
+		return err
+	}
+	if err := validateClickHouseConfig("db.clickhouse", c.DB.ClickHouse); err != nil {
 		return err
 	}
 
@@ -513,5 +558,27 @@ func validateScriptWorkers(path string, workers map[string][]ScriptWorkerConfig)
 		}
 	}
 
+	return nil
+}
+
+// validateClickHouseConfig validates clickhouse connection settings.
+// Params: path is config path prefix; cfg clickhouse section.
+// Returns: validation error for invalid db settings.
+func validateClickHouseConfig(path string, cfg ClickHouseConfig) error {
+	if strings.TrimSpace(cfg.Host) == "" {
+		return fmt.Errorf("%s.host cannot be empty", path)
+	}
+	if cfg.Port == 0 {
+		return fmt.Errorf("%s.port must be > 0", path)
+	}
+	if strings.TrimSpace(cfg.Database) == "" {
+		return fmt.Errorf("%s.database cannot be empty", path)
+	}
+	if strings.TrimSpace(cfg.User) == "" {
+		return fmt.Errorf("%s.user cannot be empty", path)
+	}
+	if cfg.DialTimeout.Duration <= 0 {
+		return fmt.Errorf("%s.dial_timeout must be > 0", path)
+	}
 	return nil
 }

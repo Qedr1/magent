@@ -81,6 +81,7 @@ clickhouse-client --query "SELECT 1 FORMAT TSV" >/dev/null
 sed \
   -e 's/max_events = 1000/max_events = 1/' \
   -e 's/timeout_secs = 5/timeout_secs = 1/' \
+  -e "s/database = \"metrics\"/database = \"${DB_NAME}\"/" \
   "${ROOT_DIR}/deploy/vector/clickhouse-e2e.toml" > "${VECTOR_CONFIG_FAST}"
 
 bash "${ROOT_DIR}/deploy/clickhouse/create_builtin_tables.sh" "${DB_NAME}" "cpu,ram,swap,net,disk,fs,process"

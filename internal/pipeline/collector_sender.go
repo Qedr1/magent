@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"net"
 	"strings"
 	"sync"
 	"time"
@@ -31,6 +32,7 @@ type VectorGRPCSender struct {
 	mu      sync.RWMutex
 	clients map[string]vectorpb.VectorClient
 	conns   map[string]*grpc.ClientConn
+	localIP map[string]string
 }
 
 // Encode serializes a batch into protobuf PushEventsRequest payload.
@@ -68,6 +70,11 @@ func (s *VectorGRPCSender) Send(ctx context.Context, address string, payload []b
 	var request vectorpb.PushEventsRequest
 	if err := proto.Unmarshal(payload, &request); err != nil {
 		return fmt.Errorf("unmarshal push request: %w", err)
+	}
+
+	hostIP, err := s.localIPForAddress(ctx, addr, timeout)
+	if err == nil && hostIP != "" {
+		injectHostIP(&request, hostIP)
 	}
 
 	client, err := s.clientForAddress(ctx, addr, timeout)
@@ -131,6 +138,9 @@ func (s *VectorGRPCSender) clientForAddress(
 	if s.conns == nil {
 		s.conns = make(map[string]*grpc.ClientConn)
 	}
+	if s.localIP == nil {
+		s.localIP = make(map[string]string)
+	}
 	if cached, exists := s.clients[address]; exists {
 		_ = conn.Close()
 		return cached, nil
@@ -153,7 +163,83 @@ func (s *VectorGRPCSender) dropAddress(address string) {
 	}
 	delete(s.conns, address)
 	delete(s.clients, address)
+	delete(s.localIP, address)
 	_ = conn.Close()
+}
+
+// localIPForAddress resolves and caches local source IP for destination address.
+// Params: address destination host:port; timeout dial timeout.
+// Returns: local source IP or error.
+func (s *VectorGRPCSender) localIPForAddress(ctx context.Context, address string, timeout time.Duration) (string, error) {
+	s.mu.RLock()
+	if ip, ok := s.localIP[address]; ok {
+		s.mu.RUnlock()
+		return ip, nil
+	}
+	s.mu.RUnlock()
+
+	dialTimeout := timeout
+	if dialTimeout <= 0 {
+		dialTimeout = 5 * time.Second
+	}
+
+	dialCtx, cancel := context.WithTimeout(ctx, dialTimeout)
+	defer cancel()
+
+	conn, err := (&net.Dialer{Timeout: dialTimeout}).DialContext(dialCtx, "tcp", address)
+	if err != nil {
+		return "", fmt.Errorf("resolve local ip for %s: %w", address, err)
+	}
+	defer conn.Close()
+
+	localAddr, ok := conn.LocalAddr().(*net.TCPAddr)
+	if !ok || localAddr.IP == nil {
+		return "", fmt.Errorf("resolve local ip for %s: unexpected local addr", address)
+	}
+	ip := localAddr.IP.String()
+
+	s.mu.Lock()
+	if s.localIP == nil {
+		s.localIP = make(map[string]string)
+	}
+	if _, exists := s.localIP[address]; !exists {
+		s.localIP[address] = ip
+	}
+	s.mu.Unlock()
+
+	return ip, nil
+}
+
+// injectHostIP adds host_ip field to all log events in request.
+// Params: request decoded push request; hostIP local source ip.
+// Returns: none.
+func injectHostIP(request *vectorpb.PushEventsRequest, hostIP string) {
+	if request == nil || hostIP == "" {
+		return
+	}
+
+	encoded, err := encodeValue(hostIP)
+	if err != nil {
+		return
+	}
+
+	for idx := range request.Events {
+		logEvent := request.Events[idx].GetLog()
+		if logEvent == nil {
+			continue
+		}
+		if logEvent.Value == nil {
+			continue
+		}
+		rootMap := logEvent.Value.GetMap()
+		if rootMap == nil {
+			continue
+		}
+		if rootMap.Fields == nil {
+			rootMap.Fields = make(map[string]*eventpb.Value)
+		}
+		rootMap.Fields["host_ip"] = encoded
+	}
 }
 
 // encodeEventWrapper converts internal event payload into Vector EventWrapper.log.

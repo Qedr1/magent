@@ -15,6 +15,15 @@ level = "info"
 format = "json"
 path = "./var/log/magent.log"
 
+[db.clickhouse]
+host = "127.0.0.1"
+port = 8123
+database = "metrics"
+user = "default"
+password = "${CH_PASSWORD}"
+secure = false
+dial_timeout = "5s"
+
 [metrics]
 scrape = "5s"
 send = "30s"

@@ -48,6 +48,21 @@ max_events = 100
 	if got := cfg.Collector[0].Timeout.Duration; got != 5*time.Second {
 		t.Fatalf("unexpected default timeout: %v", got)
 	}
+	if got := cfg.DB.ClickHouse.Host; got != "127.0.0.1" {
+		t.Fatalf("unexpected db.clickhouse.host default: %q", got)
+	}
+	if got := cfg.DB.ClickHouse.Port; got != 8123 {
+		t.Fatalf("unexpected db.clickhouse.port default: %d", got)
+	}
+	if got := cfg.DB.ClickHouse.Database; got != "metrics" {
+		t.Fatalf("unexpected db.clickhouse.database default: %q", got)
+	}
+	if got := cfg.DB.ClickHouse.User; got != "default" {
+		t.Fatalf("unexpected db.clickhouse.user default: %q", got)
+	}
+	if got := cfg.DB.ClickHouse.DialTimeout.Duration; got != 5*time.Second {
+		t.Fatalf("unexpected db.clickhouse.dial_timeout default: %v", got)
+	}
 }
 
 // TestLoad_RejectsMissingRequiredTags verifies fail-fast on required tags.
@@ -213,6 +228,62 @@ timeout = "-1s"
 	_, err := config.Load(path)
 	if err == nil {
 		t.Fatalf("expected validation error for negative script timeout")
+	}
+}
+
+// TestLoad_ParsesClickHouseConfig verifies db.clickhouse overrides and env expansion.
+// Params: testing.T for assertions.
+// Returns: none.
+func TestLoad_ParsesClickHouseConfig(t *testing.T) {
+	t.Setenv("CH_PASSWORD", "secret-pass")
+
+	path := writeConfig(t, `
+[global]
+dc = "dc1"
+project = "infra"
+role = "db"
+
+[db.clickhouse]
+host = "10.10.10.10"
+port = 9440
+database = "metrics_e2e"
+user = "writer"
+password = "${CH_PASSWORD}"
+secure = true
+dial_timeout = "8s"
+
+[[collector]]
+addr = ["127.0.0.1:6000"]
+
+[collector.batch]
+max_events = 100
+`)
+
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+
+	if got := cfg.DB.ClickHouse.Host; got != "10.10.10.10" {
+		t.Fatalf("unexpected db.clickhouse.host: %q", got)
+	}
+	if got := cfg.DB.ClickHouse.Port; got != 9440 {
+		t.Fatalf("unexpected db.clickhouse.port: %d", got)
+	}
+	if got := cfg.DB.ClickHouse.Database; got != "metrics_e2e" {
+		t.Fatalf("unexpected db.clickhouse.database: %q", got)
+	}
+	if got := cfg.DB.ClickHouse.User; got != "writer" {
+		t.Fatalf("unexpected db.clickhouse.user: %q", got)
+	}
+	if got := cfg.DB.ClickHouse.Password; got != "secret-pass" {
+		t.Fatalf("unexpected db.clickhouse.password: %q", got)
+	}
+	if !cfg.DB.ClickHouse.Secure {
+		t.Fatalf("expected db.clickhouse.secure=true")
+	}
+	if got := cfg.DB.ClickHouse.DialTimeout.Duration; got != 8*time.Second {
+		t.Fatalf("unexpected db.clickhouse.dial_timeout: %v", got)
 	}
 }
 

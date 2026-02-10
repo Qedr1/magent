@@ -194,4 +194,33 @@ func TestVectorGRPCSender_Send(t *testing.T) {
 	if latest == nil || len(latest.Events) != 1 {
 		t.Fatalf("expected single delivered event")
 	}
+
+	logEvent := latest.Events[0].GetLog()
+	if logEvent == nil || logEvent.Value == nil || logEvent.Value.GetMap() == nil {
+		t.Fatalf("expected delivered log event with map payload")
+	}
+	root := logEvent.Value.GetMap().GetFields()
+	hostIP := string(root["host_ip"].GetRawBytes())
+	if hostIP != "127.0.0.1" {
+		t.Fatalf("unexpected host_ip field: %q", hostIP)
+	}
+}
+
+// TestVectorGRPCSender_LocalIPForAddressRespectsCanceledContext verifies fast cancel on ip detection.
+// Params: testing.T for assertions.
+// Returns: none.
+func TestVectorGRPCSender_LocalIPForAddressRespectsCanceledContext(t *testing.T) {
+	sender := &VectorGRPCSender{}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	started := time.Now()
+	_, err := sender.localIPForAddress(ctx, "127.0.0.1:65534", 2*time.Second)
+	if err == nil {
+		t.Fatalf("expected localIPForAddress error for canceled context")
+	}
+	if elapsed := time.Since(started); elapsed > 200*time.Millisecond {
+		t.Fatalf("expected fast cancel, got elapsed=%v", elapsed)
+	}
 }

@@ -16,6 +16,8 @@ import (
 type fakeSender struct {
 	encodedPayload []byte
 	sendCalls      []string
+	sendTimeouts   []time.Duration
+	sendDeadlines  []bool
 	failMap        map[string]error
 }
 
@@ -29,8 +31,11 @@ func (s *fakeSender) Encode(_ []Event) ([]byte, error) {
 // Send records call order and returns configured error by address.
 // Params: ctx/timeout ignored; address selects simulated result.
 // Returns: configured error or nil.
-func (s *fakeSender) Send(_ context.Context, address string, _ []byte, _ time.Duration) error {
+func (s *fakeSender) Send(ctx context.Context, address string, _ []byte, timeout time.Duration) error {
 	s.sendCalls = append(s.sendCalls, address)
+	s.sendTimeouts = append(s.sendTimeouts, timeout)
+	_, hasDeadline := ctx.Deadline()
+	s.sendDeadlines = append(s.sendDeadlines, hasDeadline)
 	if err, ok := s.failMap[address]; ok {
 		return err
 	}
@@ -66,6 +71,48 @@ func TestCollectorWorker_SendWithFailover(t *testing.T) {
 	}
 	if sender.sendCalls[0] != "127.0.0.1:1" || sender.sendCalls[1] != "127.0.0.1:2" {
 		t.Fatalf("unexpected failover order: %#v", sender.sendCalls)
+	}
+}
+
+// TestCollectorWorker_SendWithFailoverUsesConfiguredTimeout verifies timeout/deadline propagation.
+// Params: testing.T for assertions.
+// Returns: none.
+func TestCollectorWorker_SendWithFailoverUsesConfiguredTimeout(t *testing.T) {
+	configuredTimeout := 250 * time.Millisecond
+	sender := &fakeSender{
+		encodedPayload: []byte("payload"),
+		failMap: map[string]error{
+			"127.0.0.1:1": errors.New("down"),
+			"127.0.0.1:2": errors.New("down"),
+		},
+	}
+
+	worker := &collectorWorker{
+		name: "c1",
+		cfg: config.CollectorConfig{
+			Addr:    []string{"127.0.0.1:1", "127.0.0.1:2"},
+			Timeout: config.Duration{Duration: configuredTimeout},
+		},
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		sender: sender,
+	}
+
+	if err := worker.sendWithFailover(context.Background(), []byte("x")); err == nil {
+		t.Fatalf("expected failover error when all collector addresses fail")
+	}
+
+	if len(sender.sendTimeouts) != 2 {
+		t.Fatalf("unexpected timeout call count: %d", len(sender.sendTimeouts))
+	}
+	for idx, got := range sender.sendTimeouts {
+		if got != configuredTimeout {
+			t.Fatalf("unexpected timeout at send[%d]: %v", idx, got)
+		}
+	}
+	for idx, hasDeadline := range sender.sendDeadlines {
+		if !hasDeadline {
+			t.Fatalf("expected context deadline at send[%d]", idx)
+		}
 	}
 }
 
@@ -221,6 +268,122 @@ func TestCollectorSink_ConsumeFanout(t *testing.T) {
 		}
 	default:
 		t.Fatalf("workerB did not receive event")
+	}
+}
+
+type retrySender struct {
+	mu             sync.Mutex
+	encodedPayload []byte
+	results        []error
+	sendCalls      int
+}
+
+// Encode returns fixed payload for deterministic retry tests.
+// Params: events ignored in fake implementation.
+// Returns: preconfigured payload.
+func (s *retrySender) Encode(_ []Event) ([]byte, error) {
+	return s.encodedPayload, nil
+}
+
+// Send returns scripted results in call order.
+// Params: ctx/address/payload/timeout are ignored in this fake.
+// Returns: scripted error for current call index.
+func (s *retrySender) Send(_ context.Context, _ string, _ []byte, _ time.Duration) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	callIdx := s.sendCalls
+	s.sendCalls++
+	if callIdx < len(s.results) {
+		return s.results[callIdx]
+	}
+	return nil
+}
+
+// Calls returns current send call count.
+// Params: none.
+// Returns: number of Send invocations.
+func (s *retrySender) Calls() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.sendCalls
+}
+
+// TestCollectorWorker_RetryDrainsQueue verifies queued payload is retried and acked by retry ticker.
+// Params: testing.T for assertions.
+// Returns: none.
+func TestCollectorWorker_RetryDrainsQueue(t *testing.T) {
+	queue, err := OpenDiskQueue(t.TempDir(), 10, 0)
+	if err != nil {
+		t.Fatalf("open queue: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = queue.Close()
+	})
+
+	sender := &retrySender{
+		encodedPayload: []byte("payload"),
+		results: []error{
+			errors.New("down-now"),
+			errors.New("down-drain-initial"),
+			nil,
+		},
+	}
+
+	worker := &collectorWorker{
+		name: "c1",
+		cfg: config.CollectorConfig{
+			Addr:          []string{"127.0.0.1:1"},
+			Timeout:       config.Duration{Duration: 50 * time.Millisecond},
+			RetryInterval: config.Duration{Duration: 40 * time.Millisecond},
+			Batch: config.CollectorBatchConfig{
+				MaxEvents: 1,
+				MaxAge:    config.Duration{Duration: time.Second},
+			},
+		},
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		sender: sender,
+		queue:  queue,
+		input:  make(chan Event, 1),
+		batch: []Event{
+			{Metric: "cpu", Key: "total"},
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	worker.flushBatch(ctx)
+	if got := queue.Pending(); got != 1 {
+		t.Fatalf("expected one queued payload after initial send failure, got %d", got)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		worker.run(ctx)
+		close(done)
+	}()
+
+	deadline := time.Now().Add(800 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if queue.Pending() == 0 && sender.Calls() >= 3 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatalf("worker did not stop after cancel")
+	}
+
+	if got := queue.Pending(); got != 0 {
+		t.Fatalf("expected queued payload to be drained after retry, got pending=%d", got)
+	}
+	if sender.Calls() < 3 {
+		t.Fatalf("expected at least three send attempts, got %d", sender.Calls())
 	}
 }
 

@@ -39,7 +39,7 @@ type metricWorker struct {
 	logger   *slog.Logger
 	buffer   map[string]map[string]*series
 	known    map[string]map[string]metrics.ValueKind
-	lastDTMs uint64
+	windowDT uint64
 }
 
 // run executes scrape/send loops until context cancellation.
@@ -70,6 +70,8 @@ func (w *metricWorker) run(ctx context.Context) error {
 // Params: ctx for scrape cancellation.
 // Returns: none.
 func (w *metricWorker) scrapeOnce(ctx context.Context) {
+	scrapeAt := uint64(time.Now().UnixMilli())
+
 	points, err := w.cfg.Collector.Scrape(ctx)
 	if err != nil {
 		w.logger.Error(
@@ -81,8 +83,12 @@ func (w *metricWorker) scrapeOnce(ctx context.Context) {
 		return
 	}
 
-	w.lastDTMs = uint64(time.Now().UnixMilli())
-	w.appendPoints(points)
+	if !w.appendPoints(points) {
+		return
+	}
+	if w.windowDT == 0 {
+		w.windowDT = scrapeAt
+	}
 }
 
 // emitWindow aggregates current buffer and sends events through sink.
@@ -93,10 +99,18 @@ func (w *metricWorker) emitWindow(ctx context.Context) {
 		return
 	}
 
-	dts := uint64(time.Now().Unix())
-	dt := w.lastDTMs
+	sendAt := time.Now()
+	dts := uint64(sendAt.Unix())
+	dt := w.windowDT
 	if dt == 0 {
-		dt = uint64(time.Now().UnixMilli())
+		dt = uint64(sendAt.Add(-w.cfg.ScrapeEvery).UnixMilli())
+	}
+	if dt/1000 >= dts {
+		if dts > 0 {
+			dt = (dts - 1) * 1000
+		} else if dt > 0 {
+			dt--
+		}
 	}
 
 	for key, vars := range w.known {
@@ -145,6 +159,7 @@ func (w *metricWorker) emitWindow(ctx context.Context) {
 	}
 
 	w.buffer = make(map[string]map[string]*series)
+	w.windowDT = 0
 	if !w.cfg.KeepKnown {
 		w.known = make(map[string]map[string]metrics.ValueKind)
 	}
@@ -152,8 +167,10 @@ func (w *metricWorker) emitWindow(ctx context.Context) {
 
 // appendPoints appends one scrape result into in-memory window buffers.
 // Params: points keyed values from collector.
-// Returns: none.
-func (w *metricWorker) appendPoints(points []metrics.Point) {
+// Returns: true when at least one variable sample is appended.
+func (w *metricWorker) appendPoints(points []metrics.Point) bool {
+	appended := false
+
 	for _, point := range points {
 		key := strings.TrimSpace(point.Key)
 		if key == "" {
@@ -184,8 +201,11 @@ func (w *metricWorker) appendPoints(points []metrics.Point) {
 			seriesBuffer.kind = value.Kind
 			seriesBuffer.values = append(seriesBuffer.values, value.Raw)
 			w.known[key][valueName] = value.Kind
+			appended = true
 		}
 	}
+
+	return appended
 }
 
 // resolveSeries composes effective series map for one key.
