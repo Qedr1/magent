@@ -99,16 +99,18 @@ func (c *DISKCollector) Scrape(ctx context.Context) ([]Point, error) {
 		points = append(points, Point{
 			Key: key,
 			Values: map[string]Value{
-				"rx_io":    {Raw: float64(ratePerSecond(readCountDelta, seconds)), Kind: KindNumber},
-				"tx_io":    {Raw: float64(ratePerSecond(writeCountDelta, seconds)), Kind: KindNumber},
-				"rx_b":     {Raw: float64(ratePerSecond(readBytesDelta, seconds)), Kind: KindNumber},
-				"tx_b":     {Raw: float64(ratePerSecond(writeBytesDelta, seconds)), Kind: KindNumber},
-				"rx_await": {Raw: rxAwait, Kind: KindNumber},
-				"tx_await": {Raw: txAwait, Kind: KindNumber},
-				"await":    {Raw: await, Kind: KindNumber},
-				"qdepth":   {Raw: qdepth, Kind: KindNumber},
-				"util":     {Raw: util, Kind: KindPercent},
-				"inflight": {Raw: float64(stat.IopsInProgress), Kind: KindNumber},
+				"rx_io":            {Raw: float64(ratePerSecond(readCountDelta, seconds)), Kind: KindNumber},
+				"tx_io":            {Raw: float64(ratePerSecond(writeCountDelta, seconds)), Kind: KindNumber},
+				"rx_bytes":         {Raw: float64(readBytesDelta), Kind: KindNumber},
+				"tx_bytes":         {Raw: float64(writeBytesDelta), Kind: KindNumber},
+				"rx_bytes_per_sec": {Raw: float64(ratePerSecond(readBytesDelta, seconds)), Kind: KindNumber},
+				"tx_bytes_per_sec": {Raw: float64(ratePerSecond(writeBytesDelta, seconds)), Kind: KindNumber},
+				"rx_await":         {Raw: rxAwait, Kind: KindNumber},
+				"tx_await":         {Raw: txAwait, Kind: KindNumber},
+				"await":            {Raw: await, Kind: KindNumber},
+				"qdepth":           {Raw: qdepth, Kind: KindNumber},
+				"util":             {Raw: util, Kind: KindPercent},
+				"inflight":         {Raw: float64(stat.IopsInProgress), Kind: KindNumber},
 			},
 		})
 	}

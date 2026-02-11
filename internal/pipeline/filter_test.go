@@ -6,9 +6,9 @@ import "testing"
 // Params: testing.T for assertions.
 // Returns: none.
 func TestIsVariableAllowed_FilterAndDrop(t *testing.T) {
-	allowed := isVariableAllowed("rx_b", []string{"rx_*"}, []string{"rx_err"})
+	allowed := isVariableAllowed("rx_bytes_per_sec", []string{"rx_*"}, []string{"rx_err"})
 	if !allowed {
-		t.Fatalf("expected rx_b to pass filter_var")
+		t.Fatalf("expected rx_bytes_per_sec to pass filter_var")
 	}
 
 	dropped := isVariableAllowed("rx_err", []string{"rx_*"}, []string{"rx_err"})
@@ -16,9 +16,9 @@ func TestIsVariableAllowed_FilterAndDrop(t *testing.T) {
 		t.Fatalf("expected rx_err to be dropped by drop_var")
 	}
 
-	notFiltered := isVariableAllowed("tx_b", []string{"rx_*"}, nil)
+	notFiltered := isVariableAllowed("tx_bytes_per_sec", []string{"rx_*"}, nil)
 	if notFiltered {
-		t.Fatalf("expected tx_b to be dropped by filter_var")
+		t.Fatalf("expected tx_bytes_per_sec to be dropped by filter_var")
 	}
 }
 
@@ -57,8 +57,8 @@ func TestDropCondition_NumericAndVar(t *testing.T) {
 	}
 
 	data := map[string]map[string]any{
-		"iops": {"last": uint64(150)},
-		"rx_b": {"last": uint64(1)},
+		"iops":             {"last": uint64(150)},
+		"rx_bytes_per_sec": {"last": uint64(1)},
 	}
 
 	if !shouldDropEvent([]DropCondition{numeric}, EventEvalContext{Data: data}) {

@@ -88,14 +88,16 @@ func (c *NETCollector) Scrape(ctx context.Context) ([]Point, error) {
 		points = append(points, Point{
 			Key: stat.Name,
 			Values: map[string]Value{
-				"tx":      {Raw: float64(txRate), Kind: KindNumber},
-				"rx":      {Raw: float64(rxRate), Kind: KindNumber},
-				"tx_pkt":  {Raw: float64(txPktRate), Kind: KindNumber},
-				"rx_pkt":  {Raw: float64(rxPktRate), Kind: KindNumber},
-				"rx_err":  {Raw: float64(deltaRecvErr), Kind: KindNumber},
-				"tx_err":  {Raw: float64(deltaSentErr), Kind: KindNumber},
-				"rx_drop": {Raw: float64(deltaRecvDrop), Kind: KindNumber},
-				"tx_drop": {Raw: float64(deltaSentDrop), Kind: KindNumber},
+				"tx_bytes":         {Raw: float64(deltaSent), Kind: KindNumber},
+				"rx_bytes":         {Raw: float64(deltaRecv), Kind: KindNumber},
+				"tx_bytes_per_sec": {Raw: float64(txRate), Kind: KindNumber},
+				"rx_bytes_per_sec": {Raw: float64(rxRate), Kind: KindNumber},
+				"tx_pkt":           {Raw: float64(txPktRate), Kind: KindNumber},
+				"rx_pkt":           {Raw: float64(rxPktRate), Kind: KindNumber},
+				"rx_err":           {Raw: float64(deltaRecvErr), Kind: KindNumber},
+				"tx_err":           {Raw: float64(deltaSentErr), Kind: KindNumber},
+				"rx_drop":          {Raw: float64(deltaRecvDrop), Kind: KindNumber},
+				"tx_drop":          {Raw: float64(deltaSentDrop), Kind: KindNumber},
 			},
 		})
 	}
