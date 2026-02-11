@@ -1,0 +1,42 @@
+[global]
+dc = "dc1"
+project = "infra"
+role = "stability"
+host = ""
+
+[log.console]
+enabled = true
+level = "warn"
+format = "line"
+
+[log.file]
+enabled = true
+level = "debug"
+format = "json"
+path = "/tmp/magent-chaos-agent.log"
+
+[metrics]
+scrape = "1s"
+send = "1s"
+percentiles = [50]
+
+[[metrics.script.chaos]]
+name = "chaos-script"
+path = "/tmp/magent-chaos-script.sh"
+timeout = "1s"
+
+[[collector]]
+name = "vector-failover-chaos"
+addr = ["127.0.0.1:6200", "127.0.0.1:6201"]
+timeout = "1s"
+retry_interval = "1s"
+
+[collector.batch]
+max_events = 200
+max_age = "2s"
+
+[collector.queue]
+enabled = true
+dir = "/tmp/magent-chaos-queue"
+max_events = 200000
+max_age = "24h"

@@ -41,3 +41,14 @@
 - Run:
   - `bash ./deploy/e2e/run_collector_delivery_modes.sh`
   - `bash ./deploy/e2e/run_collector_delivery_modes.sh <failover_db> <multi_db_a> <multi_db_b>`
+
+## Collector Failover Chaos
+
+- Folder: `deploy/e2e/chaos_failover/`
+- Covers:
+  - one `[[collector]]` with two addresses
+  - random `vector-a/vector-b` stop/start (including both down)
+  - no-loss check by deterministic script keys (`expected == delivered distinct`)
+- Run:
+  - `bash ./deploy/e2e/chaos_failover/run.sh`
+  - `bash ./deploy/e2e/chaos_failover/run.sh <chaos_seconds> <drain_timeout_seconds>`
