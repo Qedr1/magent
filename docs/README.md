@@ -31,7 +31,8 @@
 - значение переменных может быть получено из переменных окружения или systemd сервиса. формат ${VAR}
 - в глобальной секции должны быть определены обязательные теги dc (датацентр), project (подпроект в продукте), role (роль хоста в продукте)
 - если тег host не задан или пустой — берем имя сервера (os.Hostname)
-- секция `[db.clickhouse]` задаёт параметры подключения к ClickHouse для deploy/e2e tooling: `host`, `port`, `database`, `user`, `password`, `secure`, `dial_timeout`
+- секция `[db.clickhouse]` задаёт параметры подключения к ClickHouse для `docs/tests` tooling: `host`, `port`, `database`, `user`, `password`, `secure`, `dial_timeout`
+- секция `[pprof]` включает runtime-профилирование агента: `enabled`, `listen` (`host:port`, например `127.0.0.1:6060`)
 
 ## Логи
 - вывод в консль строкой цветной

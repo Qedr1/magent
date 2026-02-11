@@ -11,7 +11,7 @@ This folder stores the reproducible chaos test assets for one collector with two
 
 ## Run
 ```bash
-bash ./deploy/e2e/chaos_failover/run.sh 300 180
+bash ./docs/tests/chaos_failover/run.sh 300 180
 ```
 
 Params:

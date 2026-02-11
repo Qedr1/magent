@@ -34,6 +34,12 @@ func Run(ctx context.Context, rt Runtime) error {
 
 	logStartup(logger, cfg)
 
+	stopPprof, err := startPprofServer(ctx, cfg.Pprof, logger)
+	if err != nil {
+		return fmt.Errorf("start pprof: %w", err)
+	}
+	defer stopPprof()
+
 	engine, err := pipeline.NewFromConfig(ctx, cfg, logger)
 	if err != nil {
 		return fmt.Errorf("build pipeline: %w", err)

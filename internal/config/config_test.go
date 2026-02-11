@@ -287,6 +287,66 @@ max_events = 100
 	}
 }
 
+// TestLoad_ParsesPprofConfig verifies pprof enable/listen parsing and default listen.
+// Params: testing.T for assertions.
+// Returns: none.
+func TestLoad_ParsesPprofConfig(t *testing.T) {
+	path := writeConfig(t, `
+[global]
+dc = "dc1"
+project = "infra"
+role = "db"
+
+[pprof]
+enabled = true
+
+[[collector]]
+addr = ["127.0.0.1:6000"]
+
+[collector.batch]
+max_events = 100
+`)
+
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+
+	if !cfg.Pprof.Enabled {
+		t.Fatalf("expected pprof to be enabled")
+	}
+	if got := cfg.Pprof.Listen; got != "127.0.0.1:6060" {
+		t.Fatalf("unexpected pprof.listen default: %q", got)
+	}
+}
+
+// TestLoad_RejectsInvalidPprofListen verifies pprof listen validation.
+// Params: testing.T for assertions.
+// Returns: none.
+func TestLoad_RejectsInvalidPprofListen(t *testing.T) {
+	path := writeConfig(t, `
+[global]
+dc = "dc1"
+project = "infra"
+role = "db"
+
+[pprof]
+enabled = true
+listen = "invalid"
+
+[[collector]]
+addr = ["127.0.0.1:6000"]
+
+[collector.batch]
+max_events = 100
+`)
+
+	_, err := config.Load(path)
+	if err == nil {
+		t.Fatalf("expected validation error for invalid pprof.listen")
+	}
+}
+
 // writeConfig creates a temp TOML config for tests.
 // Params: t test handle; body TOML content.
 // Returns: absolute path to temp config.

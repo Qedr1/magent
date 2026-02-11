@@ -15,6 +15,10 @@ level = "info"
 format = "json"
 path = "./var/log/magent.log"
 
+[pprof]
+enabled = false
+listen = "127.0.0.1:6060"
+
 [db.clickhouse]
 host = "127.0.0.1"
 port = 8123

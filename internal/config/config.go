@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"strings"
 	"time"
@@ -22,6 +23,7 @@ const (
 	defaultDBName          = "metrics"
 	defaultDBUser          = "default"
 	defaultDBDialTimeout   = 5 * time.Second
+	defaultPprofListen     = "127.0.0.1:6060"
 )
 
 // Duration wraps time.Duration for TOML parsing.
@@ -56,12 +58,21 @@ func (d *Duration) UnmarshalText(text []byte) error {
 type Config struct {
 	Global    GlobalConfig      `toml:"global"`
 	Log       LogConfig         `toml:"log"`
+	Pprof     PprofConfig       `toml:"pprof"`
 	Metrics   MetricsConfig     `toml:"metrics"`
 	Collector []CollectorConfig `toml:"collector"`
 	DB        DBConfig          `toml:"db"`
 }
 
-// DBConfig contains database connectivity settings used by deploy/e2e tooling.
+// PprofConfig defines optional runtime pprof HTTP endpoint.
+// Params: enabled flag and listen address in host:port format.
+// Returns: pprof runtime settings.
+type PprofConfig struct {
+	Enabled bool   `toml:"enabled"`
+	Listen  string `toml:"listen"`
+}
+
+// DBConfig contains database connectivity settings used by docs/tests tooling.
 // Params: nested database driver sections.
 // Returns: db connection options.
 type DBConfig struct {
@@ -279,6 +290,9 @@ func (c *Config) applyDefaults() error {
 	if c.DB.ClickHouse.DialTimeout.Duration <= 0 {
 		c.DB.ClickHouse.DialTimeout.Duration = defaultDBDialTimeout
 	}
+	if c.Pprof.Enabled && strings.TrimSpace(c.Pprof.Listen) == "" {
+		c.Pprof.Listen = defaultPprofListen
+	}
 
 	for scriptName := range c.Metrics.Script {
 		workers := c.Metrics.Script[scriptName]
@@ -320,6 +334,9 @@ func (c *Config) validate() error {
 		return err
 	}
 	if err := validateClickHouseConfig("db.clickhouse", c.DB.ClickHouse); err != nil {
+		return err
+	}
+	if err := validatePprofConfig("pprof", c.Pprof); err != nil {
 		return err
 	}
 
@@ -579,6 +596,22 @@ func validateClickHouseConfig(path string, cfg ClickHouseConfig) error {
 	}
 	if cfg.DialTimeout.Duration <= 0 {
 		return fmt.Errorf("%s.dial_timeout must be > 0", path)
+	}
+	return nil
+}
+
+// validatePprofConfig validates optional pprof endpoint settings.
+// Params: path is config path prefix; cfg pprof section.
+// Returns: validation error for invalid listen endpoint.
+func validatePprofConfig(path string, cfg PprofConfig) error {
+	if !cfg.Enabled {
+		return nil
+	}
+	if strings.TrimSpace(cfg.Listen) == "" {
+		return fmt.Errorf("%s.listen cannot be empty when enabled", path)
+	}
+	if _, _, err := net.SplitHostPort(cfg.Listen); err != nil {
+		return fmt.Errorf("%s.listen must be host:port: %w", path, err)
 	}
 	return nil
 }
