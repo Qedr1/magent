@@ -238,9 +238,9 @@
 
 ### Структура хранения ClickHouse
 Имя таблицы задается по имени метрики
-- dt: DateTime64(3)                  // дата время опроса события. один раз за период опроса, мсек
-- dts: DateTime                      // дата время отправки события. один раз за период отправки, сек
-- dtv: DateTime                      // время обработки события в vector, сек
+- dt: DateTime64(3) CODEC(DoubleDelta)                 // дата время опроса события. один раз за период опроса, мсек
+- dts: DateTime CODEC(DoubleDelta)                     // дата время отправки события. один раз за период отправки, сек
+- dtv: DateTime DEFAULT now() CODEC(DoubleDelta)       // время обработки события в vector, сек
 - dc: LowCardinality(String)         // хостер или площадка сервера с которого пришла метрики. обяз тег
 - host: LowCardinality(String)       // имя хоста с которого пришла метрики обяз. тег.
 - project: LowCardinality(String)    // название проекта или часть системной архитектуры (frontdb/back)
@@ -250,8 +250,9 @@
 - var: LowCardinality(String)        // конкретная переменная метрики. total, used, util и т.д. 
 - agg: LowCardinality(String)        // название агрегата перменной метрики. last, p90,p99 и т.д.
 - value: UInt64                      // конкретное значение агрегата agg
-- ORDER BY: (dt, host, var)
+- ORDER BY: (dt, host, key, var)
 - Партиционирование toYYYYMMDD(dt) 
+- TTL: dt + INTERVAL 4 MONTH
 
 
 ## План реализации

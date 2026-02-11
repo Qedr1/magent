@@ -26,9 +26,9 @@ fi
 "${CLICKHOUSE_CLIENT_BIN}" --query "
 CREATE TABLE IF NOT EXISTS ${DB_NAME}.${TABLE_NAME}
 (
-    dt DateTime64(3),
-    dts DateTime,
-    dtv DateTime DEFAULT now(),
+    dt DateTime64(3) CODEC(DoubleDelta),
+    dts DateTime CODEC(DoubleDelta),
+    dtv DateTime DEFAULT now() CODEC(DoubleDelta),
     dc LowCardinality(String),
     host LowCardinality(String),
     project LowCardinality(String),
@@ -41,4 +41,5 @@ CREATE TABLE IF NOT EXISTS ${DB_NAME}.${TABLE_NAME}
 )
 ENGINE = MergeTree
 PARTITION BY toYYYYMMDD(dt)
-ORDER BY (dt, host, var)"
+ORDER BY (dt, host, key, var)
+TTL dt + INTERVAL 4 MONTH"
