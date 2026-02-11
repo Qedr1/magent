@@ -68,7 +68,7 @@ send = "30s"
 
 [[metrics.process]]
 name = "process-main"
-scrape = "5s"
+scrape = "20s"
 send = "30s"
 cpu_util = 10
 ram_util = 5

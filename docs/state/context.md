@@ -17,7 +17,7 @@
 - Built-in metric names are emitted in lower-case: `cpu,ram,swap,net,disk,fs,process`.
 - `key` is mandatory string; default `"total"` if natural key is absent.
 - `data` shape: `var -> {last,pXX...}`.
-- NET throughput is emitted only as separate `rx` and `tx` per interface; combined `speed` field is not emitted.
+- NET/DISK byte metrics are unified: `rx_bytes`,`tx_bytes`,`rx_bytes_per_sec`,`tx_bytes_per_sec`.
 - Output normalization: non-percent -> `uint64`, percent -> `uint8`, math rounding.
 - `0` is a valid sample; if samples `<4`, all `pXX=0`.
 - Percentiles are computed at send window, not at scrape tick.
@@ -31,7 +31,9 @@
 - Transport: Vector Protocol v2 gRPC `PushEventsRequest` (`EventWrapper.log`).
 - Queue: append-only disk queue per collector, persisted offset, retry drain, reject-new on limits.
 - Vector/ClickHouse deploy assets + full local e2e (`agent -> Vector -> ClickHouse`) are present.
-- ClickHouse/e2e defaults use lower-case tables: `cpu,ram,swap,net,disk,fs,process`.
+- Test tooling moved to `docs/tests/*`; DB bootstrap helper is `.docs/sql/create_db_and_tables.sh`.
+- Runtime profiling supported by optional `[pprof]` (`listen` host:port).
+- ClickHouse tables use lower-case names and schema: `dt/dts/dtv CODEC(DoubleDelta)`, `ORDER BY (dt, host, key, var)`, `TTL dt + INTERVAL 4 MONTH`.
 
 ## Performance State
 - gRPC sender: connection reuse per address (drop/reconnect on send error).
@@ -69,6 +71,7 @@
 - P#18 [DONE]: Perf hot-path wave5 (PROCESS metadata cache).
 - P#19 [DONE]: Benchmark/pprof baseline vs current and capture numeric delta.
 - P#20 [DONE]: Delivery modes coverage (`failover` in one collector + dual collectors fan-out) with unit+e2e checks.
+- P#21 [OPEN]: 5h soak run (`scrape=10s`, `send=60s`, `pprof=on`) and final profile review.
 
 ## Validation
 - Latest checks pass: `go test ./...`, `go test -race ./...`, `go vet ./...`.

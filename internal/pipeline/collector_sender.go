@@ -218,10 +218,7 @@ func injectHostIP(request *vectorpb.PushEventsRequest, hostIP string) {
 		return
 	}
 
-	encoded, err := encodeValue(hostIP)
-	if err != nil {
-		return
-	}
+	encoded := encodeRawString(hostIP)
 
 	for idx := range request.Events {
 		logEvent := request.Events[idx].GetLog()
@@ -246,28 +243,71 @@ func injectHostIP(request *vectorpb.PushEventsRequest, hostIP string) {
 // Params: event unified payload.
 // Returns: encoded EventWrapper or conversion error.
 func encodeEventWrapper(event Event) (*eventpb.EventWrapper, error) {
-	logMap := map[string]any{
-		"dt":      event.DT,
-		"dts":     event.DTS,
-		"metric":  event.Metric,
-		"dc":      event.DC,
-		"host":    event.Host,
-		"project": event.Project,
-		"role":    event.Role,
-		"key":     event.Key,
-		"data":    event.Data,
+	dataValue, err := encodeMetricData(event.Data)
+	if err != nil {
+		return nil, fmt.Errorf("encode log.data: %w", err)
 	}
 
-	value, err := encodeValue(logMap)
+	dtValue, err := encodeUint64(event.DT)
 	if err != nil {
-		return nil, fmt.Errorf("encode log value: %w", err)
+		return nil, fmt.Errorf("encode log.dt: %w", err)
+	}
+	dtsValue, err := encodeUint64(event.DTS)
+	if err != nil {
+		return nil, fmt.Errorf("encode log.dts: %w", err)
+	}
+
+	logValue := &eventpb.Value{
+		Kind: &eventpb.Value_Map{
+			Map: &eventpb.ValueMap{
+				Fields: map[string]*eventpb.Value{
+					"dt":      dtValue,
+					"dts":     dtsValue,
+					"metric":  encodeRawString(event.Metric),
+					"dc":      encodeRawString(event.DC),
+					"host":    encodeRawString(event.Host),
+					"project": encodeRawString(event.Project),
+					"role":    encodeRawString(event.Role),
+					"key":     encodeRawString(event.Key),
+					"data":    dataValue,
+				},
+			},
+		},
 	}
 
 	return &eventpb.EventWrapper{
 		Event: &eventpb.EventWrapper_Log{
 			Log: &eventpb.Log{
-				Value: value,
+				Value: logValue,
 			},
+		},
+	}, nil
+}
+
+// encodeMetricData converts event data map into protobuf map value.
+// Params: data metric payload map[var]map[agg]value.
+// Returns: protobuf map value or conversion error.
+func encodeMetricData(data map[string]map[string]any) (*eventpb.Value, error) {
+	outer := make(map[string]*eventpb.Value, len(data))
+	for varName, aggMap := range data {
+		inner := make(map[string]*eventpb.Value, len(aggMap))
+		for aggName, raw := range aggMap {
+			encoded, err := encodeValue(raw)
+			if err != nil {
+				return nil, fmt.Errorf("encode %q.%q: %w", varName, aggName, err)
+			}
+			inner[aggName] = encoded
+		}
+		outer[varName] = &eventpb.Value{
+			Kind: &eventpb.Value_Map{
+				Map: &eventpb.ValueMap{Fields: inner},
+			},
+		}
+	}
+
+	return &eventpb.Value{
+		Kind: &eventpb.Value_Map{
+			Map: &eventpb.ValueMap{Fields: outer},
 		},
 	}, nil
 }
@@ -284,11 +324,7 @@ func encodeValue(value any) (*eventpb.Value, error) {
 			},
 		}, nil
 	case string:
-		return &eventpb.Value{
-			Kind: &eventpb.Value_RawBytes{
-				RawBytes: []byte(typed),
-			},
-		}, nil
+		return encodeRawString(typed), nil
 	case []byte:
 		cloned := make([]byte, len(typed))
 		copy(cloned, typed)
@@ -369,6 +405,17 @@ func encodeValue(value any) (*eventpb.Value, error) {
 		}, nil
 	default:
 		return nil, fmt.Errorf("unsupported value type %T", typed)
+	}
+}
+
+// encodeRawString converts string to protobuf raw bytes value.
+// Params: value string payload.
+// Returns: protobuf raw-bytes value.
+func encodeRawString(value string) *eventpb.Value {
+	return &eventpb.Value{
+		Kind: &eventpb.Value_RawBytes{
+			RawBytes: []byte(value),
+		},
 	}
 }
 

@@ -4,9 +4,16 @@ import (
 	"math"
 	"sort"
 	"strconv"
+	"sync"
 
 	"magent/internal/metrics"
 )
+
+var percentileSortBufferPool = sync.Pool{
+	New: func() any {
+		return make([]float64, 0, 64)
+	},
+}
 
 type series struct {
 	kind   metrics.ValueKind
@@ -37,15 +44,38 @@ func aggregateSeries(samples series, percentiles []int) map[string]any {
 		return aggregated
 	}
 
-	sortedValues := make([]float64, len(samples.values))
+	sortedValues := borrowSortBuffer(len(samples.values))
 	copy(sortedValues, samples.values)
 	sort.Float64s(sortedValues)
 
 	for _, p := range percentiles {
 		aggregated[percentileKey(p)] = normalizeValue(nearestRankPercentile(sortedValues, p), samples.kind)
 	}
+	releaseSortBuffer(sortedValues)
 
 	return aggregated
+}
+
+// borrowSortBuffer returns reusable float buffer for percentile sorting.
+// Params: required size.
+// Returns: slice with requested length.
+func borrowSortBuffer(size int) []float64 {
+	buffer := percentileSortBufferPool.Get().([]float64)
+	if cap(buffer) < size {
+		return make([]float64, size)
+	}
+	return buffer[:size]
+}
+
+// releaseSortBuffer returns float buffer into pool with capacity guard.
+// Params: buffer previously borrowed for sorting.
+// Returns: none.
+func releaseSortBuffer(buffer []float64) {
+	const maxPooledCapacity = 1 << 16
+	if cap(buffer) > maxPooledCapacity {
+		return
+	}
+	percentileSortBufferPool.Put(buffer[:0])
 }
 
 // nearestRankPercentile calculates nearest-rank percentile over sorted values.

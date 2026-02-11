@@ -15,8 +15,9 @@ import (
 )
 
 const (
-	defaultScrapeEvery = 5 * time.Second
-	defaultSendEvery   = 30 * time.Second
+	defaultScrapeEvery        = 5 * time.Second
+	defaultProcessScrapeEvery = 20 * time.Second
+	defaultSendEvery          = 30 * time.Second
 )
 
 // EventTags contains mandatory global tags added to every event.
@@ -285,10 +286,7 @@ func buildProcessWorkers(
 			continue
 		}
 
-		scrapeEvery := cfg.Metrics.Scrape.Duration
-		if scrapeEvery <= 0 {
-			scrapeEvery = defaultScrapeEvery
-		}
+		scrapeEvery := defaultProcessScrapeEvery
 		if definition.Scrape.Duration > 0 {
 			scrapeEvery = definition.Scrape.Duration
 		}

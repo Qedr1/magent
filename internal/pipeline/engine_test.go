@@ -102,3 +102,76 @@ func TestBuildScriptWorkers(t *testing.T) {
 		t.Fatalf("unexpected script instance: %q", workers[0].cfg.Instance)
 	}
 }
+
+// TestBuildProcessWorkers_DefaultScrapeEvery20s verifies process-specific default scrape interval.
+// Params: testing.T for assertions.
+// Returns: none.
+func TestBuildProcessWorkers_DefaultScrapeEvery20s(t *testing.T) {
+	cpu := 1.0
+	cfg := &config.Config{
+		Metrics: config.MetricsConfig{
+			Scrape:      config.Duration{Duration: 5 * time.Second},
+			Send:        config.Duration{Duration: 30 * time.Second},
+			Percentiles: []int{50, 90},
+			Process: []config.ProcessWorkerConfig{
+				{
+					Name:    "process-default-scrape",
+					CPUUtil: &cpu,
+				},
+			},
+		},
+	}
+
+	workers, err := buildProcessWorkers(
+		cfg,
+		EventTags{DC: "dc1", Host: "host1", Project: "infra", Role: "db"},
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		noopSink{},
+	)
+	if err != nil {
+		t.Fatalf("buildProcessWorkers: %v", err)
+	}
+	if len(workers) != 1 {
+		t.Fatalf("unexpected worker count: %d", len(workers))
+	}
+	if got := workers[0].cfg.ScrapeEvery; got != 20*time.Second {
+		t.Fatalf("unexpected process default scrape interval: %v", got)
+	}
+}
+
+// TestBuildProcessWorkers_UsesExplicitScrapeOverride verifies per-worker scrape override.
+// Params: testing.T for assertions.
+// Returns: none.
+func TestBuildProcessWorkers_UsesExplicitScrapeOverride(t *testing.T) {
+	cpu := 1.0
+	cfg := &config.Config{
+		Metrics: config.MetricsConfig{
+			Scrape:      config.Duration{Duration: 5 * time.Second},
+			Send:        config.Duration{Duration: 30 * time.Second},
+			Percentiles: []int{50, 90},
+			Process: []config.ProcessWorkerConfig{
+				{
+					Name:    "process-explicit-scrape",
+					Scrape:  config.Duration{Duration: 45 * time.Second},
+					CPUUtil: &cpu,
+				},
+			},
+		},
+	}
+
+	workers, err := buildProcessWorkers(
+		cfg,
+		EventTags{DC: "dc1", Host: "host1", Project: "infra", Role: "db"},
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		noopSink{},
+	)
+	if err != nil {
+		t.Fatalf("buildProcessWorkers: %v", err)
+	}
+	if len(workers) != 1 {
+		t.Fatalf("unexpected worker count: %d", len(workers))
+	}
+	if got := workers[0].cfg.ScrapeEvery; got != 45*time.Second {
+		t.Fatalf("unexpected process scrape override: %v", got)
+	}
+}

@@ -29,6 +29,7 @@ type PROCESSCollector struct {
 	mu         sync.Mutex
 	prev       map[int32]processSnapshot
 	meta       map[int32]processMeta
+	procs      map[int32]*goprocess.Process
 }
 
 // NewPROCESSCollector creates a PROCESS collector.
@@ -39,6 +40,7 @@ func NewPROCESSCollector(metricName string) *PROCESSCollector {
 		metricName: metricName,
 		prev:       make(map[int32]processSnapshot),
 		meta:       make(map[int32]processMeta),
+		procs:      make(map[int32]*goprocess.Process),
 	}
 }
 
@@ -53,7 +55,7 @@ func (c *PROCESSCollector) Name() string {
 // Params: ctx for cancellation.
 // Returns: one point per process or error.
 func (c *PROCESSCollector) Scrape(ctx context.Context) ([]Point, error) {
-	processes, err := goprocess.ProcessesWithContext(ctx)
+	pids, err := goprocess.PidsWithContext(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("read process list: %w", err)
 	}
@@ -68,13 +70,21 @@ func (c *PROCESSCollector) Scrape(ctx context.Context) ([]Point, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	nextPrev := make(map[int32]processSnapshot, len(processes))
-	nextMeta := make(map[int32]processMeta, len(processes))
-	points := make([]Point, 0, len(processes))
+	nextPrev := make(map[int32]processSnapshot, len(pids))
+	nextMeta := make(map[int32]processMeta, len(pids))
+	nextProcs := make(map[int32]*goprocess.Process, len(pids))
+	points := make([]Point, 0, len(pids))
 	skipped := 0
 
-	for _, proc := range processes {
-		pid := proc.Pid
+	for _, pid := range pids {
+		proc, exists := c.procs[pid]
+		if !exists {
+			proc, err = goprocess.NewProcessWithContext(ctx, pid)
+			if err != nil {
+				skipped++
+				continue
+			}
+		}
 
 		meta, exists := c.meta[pid]
 		if !exists {
@@ -94,6 +104,7 @@ func (c *PROCESSCollector) Scrape(ctx context.Context) ([]Point, error) {
 			}
 		}
 		nextMeta[pid] = meta
+		nextProcs[pid] = proc
 
 		cpuUtil, cpuErr := proc.PercentWithContext(ctx, 0)
 		if cpuErr != nil {
@@ -145,6 +156,7 @@ func (c *PROCESSCollector) Scrape(ctx context.Context) ([]Point, error) {
 
 	c.prev = nextPrev
 	c.meta = nextMeta
+	c.procs = nextProcs
 
 	if len(points) == 0 && skipped > 0 {
 		return nil, fmt.Errorf("all process scrapes failed")
