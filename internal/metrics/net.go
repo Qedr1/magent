@@ -84,7 +84,6 @@ func (c *NETCollector) Scrape(ctx context.Context) ([]Point, error) {
 		rxRate := ratePerSecond(deltaRecv, seconds)
 		txPktRate := ratePerSecond(deltaSentPkt, seconds)
 		rxPktRate := ratePerSecond(deltaRecvPkt, seconds)
-		speed := ratePerSecond(deltaSent+deltaRecv, seconds)
 
 		points = append(points, Point{
 			Key: stat.Name,
@@ -97,7 +96,6 @@ func (c *NETCollector) Scrape(ctx context.Context) ([]Point, error) {
 				"tx_err":  {Raw: float64(deltaSentErr), Kind: KindNumber},
 				"rx_drop": {Raw: float64(deltaRecvDrop), Kind: KindNumber},
 				"tx_drop": {Raw: float64(deltaSentDrop), Kind: KindNumber},
-				"speed":   {Raw: float64(speed), Kind: KindNumber},
 			},
 		})
 	}

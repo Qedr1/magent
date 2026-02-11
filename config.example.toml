@@ -48,7 +48,7 @@ send = "30s"
 name = "net-main"
 scrape = "5s"
 send = "30s"
-# filter_var = ["rx_*", "tx_*", "speed"]
+# filter_var = ["rx_*", "tx_*"]
 # drop_var = ["rx_err", "tx_err", "rx_drop", "tx_drop"]
 # drop_event = ["key!=eth*"]
 

@@ -17,6 +17,7 @@
 - Built-in metric names are emitted in lower-case: `cpu,ram,swap,net,disk,fs,process`.
 - `key` is mandatory string; default `"total"` if natural key is absent.
 - `data` shape: `var -> {last,pXX...}`.
+- NET throughput is emitted only as separate `rx` and `tx` per interface; combined `speed` field is not emitted.
 - Output normalization: non-percent -> `uint64`, percent -> `uint8`, math rounding.
 - `0` is a valid sample; if samples `<4`, all `pXX=0`.
 - Percentiles are computed at send window, not at scrape tick.
@@ -73,4 +74,5 @@
 - Latest checks pass: `go test ./...`, `go test -race ./...`, `go vet ./...`.
 - E2E pass: `run_agent_vector_clickhouse.sh`, `run_all_metrics_queue_batch.sh`.
 - E2E pass: `run_collector_delivery_modes.sh` (failover rows>0, multi rows>0 for both collectors).
+- E2E pass: net duplex verification (`download->rx`, `upload->tx`) with DB-backed ratio checks (`status=PASS`).
 - P#19 max-load (60s): total `338064` rows, approx `5634.40 rows/s`.
