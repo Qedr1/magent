@@ -40,6 +40,6 @@ CREATE TABLE IF NOT EXISTS ${DB_NAME}.${table_trimmed}
 )
 ENGINE = MergeTree
 PARTITION BY toYYYYMMDD(dt)
-ORDER BY (dt, host, key, var)
+ORDER BY (dt, host, key)
 TTL dt + INTERVAL 4 MONTH"
 done

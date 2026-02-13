@@ -31,7 +31,7 @@ func TestProcessEmitFilter_ORLogic(t *testing.T) {
 		"iops":     {kind: metrics.KindNumber, values: []float64{10}},
 	}
 
-	if !filter("1|postgres|/usr/bin/postgres", input) {
+	if !filter("postgres", input) {
 		t.Fatalf("expected emit due to cpu_util >= threshold")
 	}
 }
@@ -49,7 +49,7 @@ func TestProcessEmitFilter_NoMatch(t *testing.T) {
 		"cpu_util": {kind: metrics.KindPercent, values: []float64{10, 20, 30}},
 	}
 
-	if filter("1|nginx|/usr/sbin/nginx", input) {
+	if filter("nginx", input) {
 		t.Fatalf("did not expect emit when threshold is not reached")
 	}
 }

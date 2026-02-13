@@ -18,7 +18,6 @@ type processSnapshot struct {
 
 type processMeta struct {
 	name string
-	exe  string
 }
 
 // PROCESSCollector scrapes process CPU/RAM and IO operations rate.
@@ -93,15 +92,13 @@ func (c *PROCESSCollector) Scrape(ctx context.Context) ([]Point, error) {
 				skipped++
 				continue
 			}
-
-			exe, exeErr := proc.ExeWithContext(ctx)
-			if exeErr != nil {
-				exe = ""
-			}
 			meta = processMeta{
 				name: name,
-				exe:  exe,
 			}
+		}
+		if meta.name == "" {
+			skipped++
+			continue
 		}
 		nextMeta[pid] = meta
 		nextProcs[pid] = proc
@@ -145,7 +142,7 @@ func (c *PROCESSCollector) Scrape(ctx context.Context) ([]Point, error) {
 		}
 
 		points = append(points, Point{
-			Key: fmt.Sprintf("%d|%s|%s", pid, meta.name, meta.exe),
+			Key: meta.name,
 			Values: map[string]Value{
 				"cpu_util": {Raw: cpuUtil, Kind: KindPercent},
 				"ram_util": {Raw: ramUtil, Kind: KindPercent},

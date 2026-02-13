@@ -43,7 +43,13 @@ func (c *FSCollector) Scrape(ctx context.Context) ([]Point, error) {
 	skipped := 0
 
 	for _, part := range partitions {
-		usage, usageErr := disk.UsageWithContext(ctx, part.Mountpoint)
+		mpoint := strings.TrimSpace(part.Mountpoint)
+		if mpoint == "" {
+			skipped++
+			continue
+		}
+
+		usage, usageErr := disk.UsageWithContext(ctx, mpoint)
 		if usageErr != nil {
 			skipped++
 			continue
@@ -55,7 +61,7 @@ func (c *FSCollector) Scrape(ctx context.Context) ([]Point, error) {
 		}
 
 		points = append(points, Point{
-			Key: fmt.Sprintf("%s|%s|%s", part.Mountpoint, part.Device, part.Fstype),
+			Key: mpoint,
 			Values: map[string]Value{
 				"total":        {Raw: float64(usage.Total), Kind: KindNumber},
 				"used":         {Raw: float64(usage.Used), Kind: KindNumber},

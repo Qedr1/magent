@@ -7,7 +7,7 @@
   - `__TABLE__` - metric table name
 - Core settings in template:
   - `dt/dts/dtv` use `CODEC(DoubleDelta)`
-  - `ORDER BY (dt, host, key, var)`
+  - `ORDER BY (dt, host, key)`
   - `TTL dt + INTERVAL 4 MONTH`
 
 ## Create built-in metric tables
