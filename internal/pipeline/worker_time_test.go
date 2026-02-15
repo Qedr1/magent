@@ -73,7 +73,7 @@ func TestMetricWorker_EmitWindowDTBeforeDTS(t *testing.T) {
 		t.Fatalf("newMetricWorker: %v", err)
 	}
 
-	worker.appendPoints([]metrics.Point{
+	worker.window.appendPoints([]metrics.Point{
 		{
 			Key: "total",
 			Values: map[string]metrics.Value{
@@ -81,8 +81,8 @@ func TestMetricWorker_EmitWindowDTBeforeDTS(t *testing.T) {
 			},
 		},
 	})
-	worker.windowDT = uint64(time.Now().UnixMilli())
-	worker.emitWindow(context.Background())
+	worker.window.observeDT(uint64(time.Now().UnixMilli()))
+	worker.window.emitWindow(context.Background(), worker.cfg.ScrapeEvery)
 
 	if len(sink.events) != 1 {
 		t.Fatalf("unexpected emitted events count: %d", len(sink.events))
@@ -122,14 +122,14 @@ func TestMetricWorker_ScrapeKeepsWindowStartDT(t *testing.T) {
 	}
 
 	worker.scrapeOnce(context.Background())
-	firstDT := worker.windowDT
+	firstDT := worker.window.windowDT
 	if firstDT == 0 {
 		t.Fatalf("expected non-zero window dt after first scrape")
 	}
 
 	time.Sleep(10 * time.Millisecond)
 	worker.scrapeOnce(context.Background())
-	if worker.windowDT != firstDT {
-		t.Fatalf("window dt changed within the same send window: first=%d second=%d", firstDT, worker.windowDT)
+	if worker.window.windowDT != firstDT {
+		t.Fatalf("window dt changed within the same send window: first=%d second=%d", firstDT, worker.window.windowDT)
 	}
 }

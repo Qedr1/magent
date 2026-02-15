@@ -62,4 +62,16 @@
   - ClickHouse row/dt-dts integrity summary
 - Run:
   - `bash ./docs/tests/run_soak_pprof.sh`
-  - `bash ./docs/tests/run_soak_pprof.sh <db_name> <duration_seconds> <cpu_profile_seconds>`
+- `bash ./docs/tests/run_soak_pprof.sh <db_name> <duration_seconds> <cpu_profile_seconds>`
+
+## HTTP metrics e2e
+
+- Script: `docs/tests/run_http_server_e2e.sh`
+- Flow: `http-server (POST JSON) -> agent -> Vector -> ClickHouse`
+- Run:
+  - `bash ./docs/tests/run_http_server_e2e.sh`
+
+- Script: `docs/tests/run_http_client_e2e.sh`
+- Flow: `http-client (GET JSON) -> agent -> Vector -> ClickHouse`
+- Run:
+  - `bash ./docs/tests/run_http_client_e2e.sh`

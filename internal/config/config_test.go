@@ -231,6 +231,91 @@ timeout = "-1s"
 	}
 }
 
+// TestLoad_ParsesHTTPClientSections verifies [[metrics.http_client.<name>]] decoding and defaults.
+// Params: testing.T for assertions.
+// Returns: none.
+func TestLoad_ParsesHTTPClientSections(t *testing.T) {
+	path := writeConfig(t, `
+[global]
+dc = "dc1"
+project = "infra"
+role = "db"
+
+[[collector]]
+addr = ["127.0.0.1:6000"]
+
+[collector.batch]
+max_events = 100
+
+[metrics]
+scrape = "5s"
+send = "30s"
+
+[[metrics.http_client.demo]]
+url = "http://127.0.0.1:18080/metrics"
+`)
+
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+
+	workers := cfg.Metrics.HTTPClient["demo"]
+	if len(workers) != 1 {
+		t.Fatalf("unexpected http-client workers count: %d", len(workers))
+	}
+	if got := workers[0].URL; got != "http://127.0.0.1:18080/metrics" {
+		t.Fatalf("unexpected http-client url: %q", got)
+	}
+	if got := workers[0].Timeout.Duration; got != 5*time.Second {
+		t.Fatalf("unexpected http-client default timeout: %v", got)
+	}
+}
+
+// TestLoad_ParsesHTTPServerSections verifies [[metrics.http_server.<name>]] decoding and defaults.
+// Params: testing.T for assertions.
+// Returns: none.
+func TestLoad_ParsesHTTPServerSections(t *testing.T) {
+	path := writeConfig(t, `
+[global]
+dc = "dc1"
+project = "infra"
+role = "db"
+
+[[collector]]
+addr = ["127.0.0.1:6000"]
+
+[collector.batch]
+max_events = 100
+
+[metrics]
+send = "30s"
+
+[[metrics.http_server.demo]]
+listen = "127.0.0.1:18081"
+path = "/metrics"
+`)
+
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+
+	workers := cfg.Metrics.HTTPServer["demo"]
+	if len(workers) != 1 {
+		t.Fatalf("unexpected http-server workers count: %d", len(workers))
+	}
+	if got := workers[0].Listen; got != "127.0.0.1:18081" {
+		t.Fatalf("unexpected http-server listen: %q", got)
+	}
+	if got := workers[0].Path; got != "/metrics" {
+		t.Fatalf("unexpected http-server path: %q", got)
+	}
+	if got := workers[0].MaxPending; got == 0 {
+		t.Fatalf("expected http-server max_pending default")
+	}
+}
+
 // TestLoad_ParsesClickHouseConfig verifies db.clickhouse overrides and env expansion.
 // Params: testing.T for assertions.
 // Returns: none.

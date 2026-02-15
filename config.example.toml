@@ -84,6 +84,24 @@ ram_util = 5
 # env = { DB_DSN = "${DB_DSN}" }
 # filter_var = ["conn_*", "util"]
 
+# # Push-based metric: agent exposes HTTP endpoint and accepts POST JSON payloads (same contract as scripts).
+# # Note: no scrape period (data arrives externally), only send/aggregation period.
+# [[metrics.http_server.http_server_demo]]
+# name = "http-server-demo"
+# listen = "127.0.0.1:18090"
+# path = "/metrics"
+# send = "30s"
+# max_pending = 4096
+#
+# # Poll-based metric: agent does HTTP GET and parses JSON response (same contract as scripts).
+# # URL supports placeholders: {dc},{host},{project},{role},{metric},{instance}
+# [[metrics.http_client.http_client_demo]]
+# name = "http-client-demo"
+# url = "http://127.0.0.1:18091/metrics/{dc}/{host}"
+# scrape = "5s"
+# send = "30s"
+# timeout = "5s"
+
 [[collector]]
 name = "primary"
 addr = ["127.0.0.1:6000", "127.0.0.1:6001"]

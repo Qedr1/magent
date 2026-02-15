@@ -18,6 +18,8 @@ const (
 	defaultCollectorBatchN = 200
 	defaultCollectorBatchA = 5 * time.Second
 	defaultScriptTimeout   = 5 * time.Second
+	defaultHTTPTimeout     = 5 * time.Second
+	defaultHTTPMaxPending  = 4096
 	defaultDBHost          = "127.0.0.1"
 	defaultDBPort          = 8123
 	defaultDBName          = "metrics"
@@ -124,17 +126,19 @@ type LogSinkConfig struct {
 // Params: defaults for metric workers.
 // Returns: metric defaults.
 type MetricsConfig struct {
-	Scrape      Duration                        `toml:"scrape"`
-	Send        Duration                        `toml:"send"`
-	Percentiles []int                           `toml:"percentiles"`
-	CPU         []MetricWorkerConfig            `toml:"cpu"`
-	RAM         []MetricWorkerConfig            `toml:"ram"`
-	SWAP        []MetricWorkerConfig            `toml:"swap"`
-	NET         []MetricWorkerConfig            `toml:"net"`
-	DISK        []MetricWorkerConfig            `toml:"disk"`
-	FS          []MetricWorkerConfig            `toml:"fs"`
-	Process     []ProcessWorkerConfig           `toml:"process"`
-	Script      map[string][]ScriptWorkerConfig `toml:"script"`
+	Scrape      Duration                            `toml:"scrape"`
+	Send        Duration                            `toml:"send"`
+	Percentiles []int                               `toml:"percentiles"`
+	CPU         []MetricWorkerConfig                `toml:"cpu"`
+	RAM         []MetricWorkerConfig                `toml:"ram"`
+	SWAP        []MetricWorkerConfig                `toml:"swap"`
+	NET         []MetricWorkerConfig                `toml:"net"`
+	DISK        []MetricWorkerConfig                `toml:"disk"`
+	FS          []MetricWorkerConfig                `toml:"fs"`
+	Process     []ProcessWorkerConfig               `toml:"process"`
+	Script      map[string][]ScriptWorkerConfig     `toml:"script"`
+	HTTPServer  map[string][]HTTPServerWorkerConfig `toml:"http_server"`
+	HTTPClient  map[string][]HTTPClientWorkerConfig `toml:"http_client"`
 }
 
 // MetricWorkerConfig defines one metric worker instance override.
@@ -180,6 +184,36 @@ type ScriptWorkerConfig struct {
 	Path        string            `toml:"path"`
 	Timeout     Duration          `toml:"timeout"`
 	Env         map[string]string `toml:"env"`
+}
+
+// HTTPServerWorkerConfig defines one HTTP server metric endpoint.
+// Params: aggregation schedule/filter options and HTTP listen settings.
+// Returns: http-server worker runtime config.
+type HTTPServerWorkerConfig struct {
+	Name        string   `toml:"name"`
+	Send        Duration `toml:"send"`
+	Percentiles []int    `toml:"percentiles"`
+	DropVar     []string `toml:"drop_var"`
+	FilterVar   []string `toml:"filter_var"`
+	DropEvent   []string `toml:"drop_event"`
+	Listen      string   `toml:"listen"`
+	Path        string   `toml:"path"`
+	MaxPending  uint64   `toml:"max_pending"`
+}
+
+// HTTPClientWorkerConfig defines one HTTP client metric worker.
+// Params: scrape/send schedule/filter options and HTTP GET settings.
+// Returns: http-client worker runtime config.
+type HTTPClientWorkerConfig struct {
+	Name        string   `toml:"name"`
+	Scrape      Duration `toml:"scrape"`
+	Send        Duration `toml:"send"`
+	Percentiles []int    `toml:"percentiles"`
+	DropVar     []string `toml:"drop_var"`
+	FilterVar   []string `toml:"filter_var"`
+	DropEvent   []string `toml:"drop_event"`
+	URL         string   `toml:"url"`
+	Timeout     Duration `toml:"timeout"`
 }
 
 // CollectorConfig defines collector target and delivery behavior.
@@ -307,6 +341,26 @@ func (c *Config) applyDefaults() error {
 		c.Metrics.Script[scriptName] = workers
 	}
 
+	for metricName := range c.Metrics.HTTPServer {
+		workers := c.Metrics.HTTPServer[metricName]
+		for idx := range workers {
+			if workers[idx].MaxPending == 0 {
+				workers[idx].MaxPending = defaultHTTPMaxPending
+			}
+		}
+		c.Metrics.HTTPServer[metricName] = workers
+	}
+
+	for metricName := range c.Metrics.HTTPClient {
+		workers := c.Metrics.HTTPClient[metricName]
+		for idx := range workers {
+			if workers[idx].Timeout.Duration == 0 {
+				workers[idx].Timeout.Duration = defaultHTTPTimeout
+			}
+		}
+		c.Metrics.HTTPClient[metricName] = workers
+	}
+
 	return nil
 }
 
@@ -412,6 +466,12 @@ func (c *Config) validate() error {
 		return err
 	}
 	if err := validateScriptWorkers("metrics.script", c.Metrics.Script); err != nil {
+		return err
+	}
+	if err := validateHTTPServerWorkers("metrics.http_server", c.Metrics.HTTPServer); err != nil {
+		return err
+	}
+	if err := validateHTTPClientWorkers("metrics.http_client", c.Metrics.HTTPClient); err != nil {
 		return err
 	}
 
@@ -570,6 +630,89 @@ func validateScriptWorkers(path string, workers map[string][]ScriptWorkerConfig)
 			for envKey := range worker.Env {
 				if strings.TrimSpace(envKey) == "" {
 					return fmt.Errorf("%s.env contains empty key", workerPath)
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+// validateHTTPServerWorkers validates HTTP server worker sections and endpoint fields.
+// Params: path is config path; workers are definitions grouped by metric name.
+// Returns: validation error for invalid values.
+func validateHTTPServerWorkers(path string, workers map[string][]HTTPServerWorkerConfig) error {
+	for metricName, definitions := range workers {
+		metric := strings.TrimSpace(metricName)
+		if metric == "" {
+			return fmt.Errorf("%s contains empty metric name", path)
+		}
+
+		for idx, worker := range definitions {
+			workerPath := fmt.Sprintf("%s.%s[%d]", path, metric, idx)
+
+			if worker.Send.Duration < 0 {
+				return fmt.Errorf("%s.send cannot be negative", workerPath)
+			}
+
+			for _, p := range worker.Percentiles {
+				if p <= 0 || p > 100 {
+					return fmt.Errorf("%s.percentiles contains invalid value %d (must be 1..100)", workerPath, p)
+				}
+			}
+
+			if strings.TrimSpace(worker.Listen) == "" {
+				return fmt.Errorf("%s.listen is required", workerPath)
+			}
+			if _, _, err := net.SplitHostPort(worker.Listen); err != nil {
+				return fmt.Errorf("%s.listen must be host:port: %w", workerPath, err)
+			}
+
+			if strings.TrimSpace(worker.Path) == "" {
+				return fmt.Errorf("%s.path is required", workerPath)
+			}
+			if !strings.HasPrefix(worker.Path, "/") {
+				return fmt.Errorf("%s.path must start with /", workerPath)
+			}
+
+			if worker.MaxPending == 0 {
+				return fmt.Errorf("%s.max_pending must be > 0", workerPath)
+			}
+		}
+	}
+
+	return nil
+}
+
+// validateHTTPClientWorkers validates HTTP client worker sections and request fields.
+// Params: path is config path; workers are definitions grouped by metric name.
+// Returns: validation error for invalid values.
+func validateHTTPClientWorkers(path string, workers map[string][]HTTPClientWorkerConfig) error {
+	for metricName, definitions := range workers {
+		metric := strings.TrimSpace(metricName)
+		if metric == "" {
+			return fmt.Errorf("%s contains empty metric name", path)
+		}
+
+		for idx, worker := range definitions {
+			workerPath := fmt.Sprintf("%s.%s[%d]", path, metric, idx)
+
+			if worker.Scrape.Duration < 0 {
+				return fmt.Errorf("%s.scrape cannot be negative", workerPath)
+			}
+			if worker.Send.Duration < 0 {
+				return fmt.Errorf("%s.send cannot be negative", workerPath)
+			}
+			if worker.Timeout.Duration <= 0 {
+				return fmt.Errorf("%s.timeout must be > 0", workerPath)
+			}
+			if strings.TrimSpace(worker.URL) == "" {
+				return fmt.Errorf("%s.url is required", workerPath)
+			}
+
+			for _, p := range worker.Percentiles {
+				if p <= 0 || p > 100 {
+					return fmt.Errorf("%s.percentiles contains invalid value %d (must be 1..100)", workerPath, p)
 				}
 			}
 		}

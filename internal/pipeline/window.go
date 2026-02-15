@@ -1,0 +1,171 @@
+package pipeline
+
+import (
+	"context"
+	"log/slog"
+	"strings"
+	"time"
+
+	"magent/internal/metrics"
+)
+
+type windowConfig struct {
+	Metric      string
+	Instance    string
+	Percentiles []int
+	Tags        EventTags
+	Sink        Sink
+	Logger      *slog.Logger
+	EmitFilter  EmitFilter
+	KeepKnown   bool
+	DropVar     []string
+	FilterVar   []string
+	DropEvent   []DropCondition
+}
+
+type window struct {
+	cfg windowConfig
+
+	buffer   map[string]map[string]*series
+	known    map[string]map[string]metrics.ValueKind
+	windowDT uint64
+}
+
+func newWindow(cfg windowConfig) *window {
+	return &window{
+		cfg:    cfg,
+		buffer: make(map[string]map[string]*series),
+		known:  make(map[string]map[string]metrics.ValueKind),
+	}
+}
+
+func (w *window) appendPoints(points []metrics.Point) bool {
+	appended := false
+
+	for _, point := range points {
+		key := strings.TrimSpace(point.Key)
+		if key == "" {
+			key = "total"
+		}
+
+		if _, ok := w.buffer[key]; !ok {
+			w.buffer[key] = make(map[string]*series)
+		}
+		if _, ok := w.known[key]; !ok {
+			w.known[key] = make(map[string]metrics.ValueKind)
+		}
+
+		for varName, value := range point.Values {
+			valueName := strings.TrimSpace(varName)
+			if valueName == "" {
+				continue
+			}
+			if !isVariableAllowed(valueName, w.cfg.FilterVar, w.cfg.DropVar) {
+				continue
+			}
+
+			seriesBuffer, ok := w.buffer[key][valueName]
+			if !ok {
+				seriesBuffer = &series{kind: value.Kind}
+				w.buffer[key][valueName] = seriesBuffer
+			}
+			seriesBuffer.kind = value.Kind
+			seriesBuffer.values = append(seriesBuffer.values, value.Raw)
+			w.known[key][valueName] = value.Kind
+			appended = true
+		}
+	}
+
+	return appended
+}
+
+func (w *window) observeDT(dtMillis uint64) {
+	if w.windowDT == 0 {
+		w.windowDT = dtMillis
+	}
+}
+
+func (w *window) resolveSeries(key string, vars map[string]metrics.ValueKind) map[string]series {
+	out := make(map[string]series, len(vars))
+	for varName, kind := range vars {
+		s := series{kind: kind}
+		if keySamples, ok := w.buffer[key]; ok {
+			if buffered, ok := keySamples[varName]; ok {
+				s = *buffered
+			}
+		}
+		out[varName] = s
+	}
+	return out
+}
+
+func (w *window) emitWindow(ctx context.Context, dtFallback time.Duration) {
+	if len(w.buffer) == 0 && len(w.known) == 0 {
+		return
+	}
+
+	sendAt := time.Now()
+	dts := uint64(sendAt.Unix())
+	dt := w.windowDT
+	if dt == 0 {
+		dt = uint64(sendAt.Add(-dtFallback).UnixMilli())
+	}
+	if dt/1000 >= dts {
+		if dts > 0 {
+			dt = (dts - 1) * 1000
+		} else if dt > 0 {
+			dt--
+		}
+	}
+
+	for key, vars := range w.known {
+		seriesMap := w.resolveSeries(key, vars)
+		if w.cfg.EmitFilter != nil && !w.cfg.EmitFilter(key, seriesMap) {
+			continue
+		}
+
+		data := make(map[string]map[string]any, len(seriesMap))
+		for varName, sampleSeries := range seriesMap {
+			data[varName] = aggregateSeries(sampleSeries, w.cfg.Percentiles)
+		}
+
+		if shouldDropEvent(
+			w.cfg.DropEvent,
+			EventEvalContext{
+				Metric: w.cfg.Metric,
+				Key:    key,
+				Data:   data,
+			},
+		) {
+			continue
+		}
+
+		event := Event{
+			DT:      dt,
+			DTS:     dts,
+			Metric:  w.cfg.Metric,
+			DC:      w.cfg.Tags.DC,
+			Host:    w.cfg.Tags.Host,
+			Project: w.cfg.Tags.Project,
+			Role:    w.cfg.Tags.Role,
+			Key:     key,
+			Data:    data,
+		}
+
+		if err := w.cfg.Sink.Consume(ctx, event); err != nil {
+			w.cfg.Logger.Error(
+				"emit failed",
+				slog.String("metric", w.cfg.Metric),
+				slog.String("instance", w.cfg.Instance),
+				slog.String("key", key),
+				slog.String("error", err.Error()),
+			)
+		}
+	}
+
+	w.buffer = make(map[string]map[string]*series)
+	w.windowDT = 0
+	if !w.cfg.KeepKnown {
+		w.known = make(map[string]map[string]metrics.ValueKind)
+	}
+}

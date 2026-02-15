@@ -34,8 +34,12 @@ type EventTags struct {
 // Params: worker list and logger.
 // Returns: pipeline runtime engine.
 type Engine struct {
-	workers []*metricWorker
+	runners []runner
 	logger  *slog.Logger
+}
+
+type runner interface {
+	run(context.Context) error
 }
 
 // NewFromConfig builds metric workers for configured metrics.
@@ -57,7 +61,7 @@ func NewFromConfig(ctx context.Context, cfg *config.Config, logger *slog.Logger)
 		collectorSink,
 		NewLogSink(logger),
 	)
-	workers := make([]*metricWorker, 0)
+	runners := make([]runner, 0)
 
 	workerSet, err := buildWorkersForMetric(
 		"cpu",
@@ -73,7 +77,9 @@ func NewFromConfig(ctx context.Context, cfg *config.Config, logger *slog.Logger)
 	if err != nil {
 		return nil, err
 	}
-	workers = append(workers, workerSet...)
+	for _, worker := range workerSet {
+		runners = append(runners, worker)
+	}
 
 	workerSet, err = buildWorkersForMetric(
 		"ram",
@@ -89,7 +95,9 @@ func NewFromConfig(ctx context.Context, cfg *config.Config, logger *slog.Logger)
 	if err != nil {
 		return nil, err
 	}
-	workers = append(workers, workerSet...)
+	for _, worker := range workerSet {
+		runners = append(runners, worker)
+	}
 
 	workerSet, err = buildWorkersForMetric(
 		"swap",
@@ -105,7 +113,9 @@ func NewFromConfig(ctx context.Context, cfg *config.Config, logger *slog.Logger)
 	if err != nil {
 		return nil, err
 	}
-	workers = append(workers, workerSet...)
+	for _, worker := range workerSet {
+		runners = append(runners, worker)
+	}
 
 	workerSet, err = buildWorkersForMetric(
 		"net",
@@ -121,7 +131,9 @@ func NewFromConfig(ctx context.Context, cfg *config.Config, logger *slog.Logger)
 	if err != nil {
 		return nil, err
 	}
-	workers = append(workers, workerSet...)
+	for _, worker := range workerSet {
+		runners = append(runners, worker)
+	}
 
 	workerSet, err = buildWorkersForMetric(
 		"disk",
@@ -137,7 +149,9 @@ func NewFromConfig(ctx context.Context, cfg *config.Config, logger *slog.Logger)
 	if err != nil {
 		return nil, err
 	}
-	workers = append(workers, workerSet...)
+	for _, worker := range workerSet {
+		runners = append(runners, worker)
+	}
 
 	workerSet, err = buildWorkersForMetric(
 		"fs",
@@ -153,22 +167,42 @@ func NewFromConfig(ctx context.Context, cfg *config.Config, logger *slog.Logger)
 	if err != nil {
 		return nil, err
 	}
-	workers = append(workers, workerSet...)
+	for _, worker := range workerSet {
+		runners = append(runners, worker)
+	}
 
 	processWorkers, err := buildProcessWorkers(cfg, tags, logger, sink)
 	if err != nil {
 		return nil, err
 	}
-	workers = append(workers, processWorkers...)
+	for _, worker := range processWorkers {
+		runners = append(runners, worker)
+	}
 
 	scriptWorkers, err := buildScriptWorkers(cfg, tags, logger, sink)
 	if err != nil {
 		return nil, err
 	}
-	workers = append(workers, scriptWorkers...)
+	for _, worker := range scriptWorkers {
+		runners = append(runners, worker)
+	}
+
+	httpClientWorkers, err := buildHTTPClientWorkers(cfg, tags, logger, sink)
+	if err != nil {
+		return nil, err
+	}
+	for _, worker := range httpClientWorkers {
+		runners = append(runners, worker)
+	}
+
+	httpServerRunners, err := buildHTTPServerRunners(cfg, tags, logger, sink)
+	if err != nil {
+		return nil, err
+	}
+	runners = append(runners, httpServerRunners...)
 
 	return &Engine{
-		workers: workers,
+		runners: runners,
 		logger:  logger,
 	}, nil
 }
@@ -177,20 +211,22 @@ func NewFromConfig(ctx context.Context, cfg *config.Config, logger *slog.Logger)
 // Params: ctx lifecycle context.
 // Returns: nil on graceful stop.
 func (e *Engine) Run(ctx context.Context) error {
-	if len(e.workers) == 0 {
+	if len(e.runners) == 0 {
 		e.logger.Warn("no metric workers configured")
 		<-ctx.Done()
 		return nil
 	}
 
 	var wg sync.WaitGroup
-	wg.Add(len(e.workers))
+	wg.Add(len(e.runners))
 
-	for _, worker := range e.workers {
-		go func(activeWorker *metricWorker) {
+	for _, r := range e.runners {
+		go func(activeRunner runner) {
 			defer wg.Done()
-			_ = activeWorker.run(ctx)
-		}(worker)
+			if err := activeRunner.run(ctx); err != nil {
+				e.logger.Error("runner stopped with error", slog.String("error", err.Error()))
+			}
+		}(r)
 	}
 
 	<-ctx.Done()
@@ -212,6 +248,11 @@ func buildWorkersForMetric(
 ) ([]*metricWorker, error) {
 	out := make([]*metricWorker, 0, len(definitions))
 	for idx, definition := range definitions {
+		dropConditions, err := compileDropConditions(definition.DropEvent)
+		if err != nil {
+			return nil, fmt.Errorf("build %s worker[%d]: %w", strings.ToLower(metricName), idx, err)
+		}
+
 		scrapeEvery := defaults.Scrape.Duration
 		if scrapeEvery <= 0 {
 			scrapeEvery = defaultScrapeEvery
@@ -246,6 +287,7 @@ func buildWorkersForMetric(
 				KeepKnown:   true,
 				DropVar:     definition.DropVar,
 				FilterVar:   definition.FilterVar,
+				DropEvent:   dropConditions,
 			},
 			sink,
 			logger,
@@ -253,12 +295,6 @@ func buildWorkersForMetric(
 		if err != nil {
 			return nil, fmt.Errorf("build %s worker[%d]: %w", strings.ToLower(metricName), idx, err)
 		}
-
-		dropConditions, err := compileDropConditions(definition.DropEvent)
-		if err != nil {
-			return nil, fmt.Errorf("build %s worker[%d]: %w", strings.ToLower(metricName), idx, err)
-		}
-		worker.cfg.DropEvent = dropConditions
 
 		out = append(out, worker)
 	}
@@ -284,6 +320,11 @@ func buildProcessWorkers(
 				slog.Int("worker_index", idx),
 			)
 			continue
+		}
+
+		dropConditions, err := compileDropConditions(definition.DropEvent)
+		if err != nil {
+			return nil, fmt.Errorf("build process worker[%d]: %w", idx, err)
 		}
 
 		scrapeEvery := defaultProcessScrapeEvery
@@ -318,6 +359,7 @@ func buildProcessWorkers(
 				KeepKnown:   false,
 				DropVar:     definition.DropVar,
 				FilterVar:   definition.FilterVar,
+				DropEvent:   dropConditions,
 			},
 			sink,
 			logger,
@@ -325,12 +367,6 @@ func buildProcessWorkers(
 		if err != nil {
 			return nil, fmt.Errorf("build process worker[%d]: %w", idx, err)
 		}
-
-		dropConditions, err := compileDropConditions(definition.DropEvent)
-		if err != nil {
-			return nil, fmt.Errorf("build process worker[%d]: %w", idx, err)
-		}
-		worker.cfg.DropEvent = dropConditions
 
 		out = append(out, worker)
 	}
@@ -363,6 +399,11 @@ func buildScriptWorkers(
 		definitions := cfg.Metrics.Script[scriptName]
 
 		for idx, definition := range definitions {
+			dropConditions, err := compileDropConditions(definition.DropEvent)
+			if err != nil {
+				return nil, fmt.Errorf("build script worker %s[%d]: %w", scriptMetric, idx, err)
+			}
+
 			scrapeEvery := cfg.Metrics.Scrape.Duration
 			if scrapeEvery <= 0 {
 				scrapeEvery = defaultScrapeEvery
@@ -403,6 +444,7 @@ func buildScriptWorkers(
 					KeepKnown: true,
 					DropVar:   definition.DropVar,
 					FilterVar: definition.FilterVar,
+					DropEvent: dropConditions,
 				},
 				sink,
 				logger,
@@ -410,12 +452,6 @@ func buildScriptWorkers(
 			if err != nil {
 				return nil, fmt.Errorf("build script worker %s[%d]: %w", scriptMetric, idx, err)
 			}
-
-			dropConditions, err := compileDropConditions(definition.DropEvent)
-			if err != nil {
-				return nil, fmt.Errorf("build script worker %s[%d]: %w", scriptMetric, idx, err)
-			}
-			worker.cfg.DropEvent = dropConditions
 
 			out = append(out, worker)
 		}

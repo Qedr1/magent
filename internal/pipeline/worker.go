@@ -34,12 +34,8 @@ type WorkerConfig struct {
 type EmitFilter func(key string, seriesMap map[string]series) bool
 
 type metricWorker struct {
-	cfg      WorkerConfig
-	sink     Sink
-	logger   *slog.Logger
-	buffer   map[string]map[string]*series
-	known    map[string]map[string]metrics.ValueKind
-	windowDT uint64
+	cfg    WorkerConfig
+	window *window
 }
 
 // run executes scrape/send loops until context cancellation.
@@ -61,7 +57,7 @@ func (w *metricWorker) run(ctx context.Context) error {
 		case <-scrapeTicker.C:
 			w.scrapeOnce(ctx)
 		case <-sendTicker.C:
-			w.emitWindow(ctx)
+			w.window.emitWindow(ctx, w.cfg.ScrapeEvery)
 		}
 	}
 }
@@ -74,7 +70,7 @@ func (w *metricWorker) scrapeOnce(ctx context.Context) {
 
 	points, err := w.cfg.Collector.Scrape(ctx)
 	if err != nil {
-		w.logger.Error(
+		w.window.cfg.Logger.Error(
 			"scrape failed",
 			slog.String("metric", w.cfg.Metric),
 			slog.String("instance", w.cfg.Instance),
@@ -83,152 +79,22 @@ func (w *metricWorker) scrapeOnce(ctx context.Context) {
 		return
 	}
 
-	if !w.appendPoints(points) {
+	if !w.window.appendPoints(points) {
 		return
 	}
-	if w.windowDT == 0 {
-		w.windowDT = scrapeAt
-	}
-}
-
-// emitWindow aggregates current buffer and sends events through sink.
-// Params: ctx for sink operations.
-// Returns: none.
-func (w *metricWorker) emitWindow(ctx context.Context) {
-	if len(w.buffer) == 0 && len(w.known) == 0 {
-		return
-	}
-
-	sendAt := time.Now()
-	dts := uint64(sendAt.Unix())
-	dt := w.windowDT
-	if dt == 0 {
-		dt = uint64(sendAt.Add(-w.cfg.ScrapeEvery).UnixMilli())
-	}
-	if dt/1000 >= dts {
-		if dts > 0 {
-			dt = (dts - 1) * 1000
-		} else if dt > 0 {
-			dt--
-		}
-	}
-
-	for key, vars := range w.known {
-		seriesMap := w.resolveSeries(key, vars)
-		if w.cfg.EmitFilter != nil && !w.cfg.EmitFilter(key, seriesMap) {
-			continue
-		}
-
-		data := make(map[string]map[string]any, len(seriesMap))
-		for varName, sampleSeries := range seriesMap {
-			data[varName] = aggregateSeries(sampleSeries, w.cfg.Percentiles)
-		}
-
-		if shouldDropEvent(
-			w.cfg.DropEvent,
-			EventEvalContext{
-				Metric: w.cfg.Metric,
-				Key:    key,
-				Data:   data,
-			},
-		) {
-			continue
-		}
-
-		event := Event{
-			DT:      dt,
-			DTS:     dts,
-			Metric:  w.cfg.Metric,
-			DC:      w.cfg.Tags.DC,
-			Host:    w.cfg.Tags.Host,
-			Project: w.cfg.Tags.Project,
-			Role:    w.cfg.Tags.Role,
-			Key:     key,
-			Data:    data,
-		}
-
-		if err := w.sink.Consume(ctx, event); err != nil {
-			w.logger.Error(
-				"emit failed",
-				slog.String("metric", w.cfg.Metric),
-				slog.String("instance", w.cfg.Instance),
-				slog.String("key", key),
-				slog.String("error", err.Error()),
-			)
-		}
-	}
-
-	w.buffer = make(map[string]map[string]*series)
-	w.windowDT = 0
-	if !w.cfg.KeepKnown {
-		w.known = make(map[string]map[string]metrics.ValueKind)
-	}
-}
-
-// appendPoints appends one scrape result into in-memory window buffers.
-// Params: points keyed values from collector.
-// Returns: true when at least one variable sample is appended.
-func (w *metricWorker) appendPoints(points []metrics.Point) bool {
-	appended := false
-
-	for _, point := range points {
-		key := strings.TrimSpace(point.Key)
-		if key == "" {
-			key = "total"
-		}
-
-		if _, ok := w.buffer[key]; !ok {
-			w.buffer[key] = make(map[string]*series)
-		}
-		if _, ok := w.known[key]; !ok {
-			w.known[key] = make(map[string]metrics.ValueKind)
-		}
-
-		for varName, value := range point.Values {
-			valueName := strings.TrimSpace(varName)
-			if valueName == "" {
-				continue
-			}
-			if !isVariableAllowed(valueName, w.cfg.FilterVar, w.cfg.DropVar) {
-				continue
-			}
-
-			seriesBuffer, ok := w.buffer[key][valueName]
-			if !ok {
-				seriesBuffer = &series{kind: value.Kind}
-				w.buffer[key][valueName] = seriesBuffer
-			}
-			seriesBuffer.kind = value.Kind
-			seriesBuffer.values = append(seriesBuffer.values, value.Raw)
-			w.known[key][valueName] = value.Kind
-			appended = true
-		}
-	}
-
-	return appended
-}
-
-// resolveSeries composes effective series map for one key.
-// Params: key key value; vars known variable kinds for key.
-// Returns: per-variable series with samples for current window.
-func (w *metricWorker) resolveSeries(key string, vars map[string]metrics.ValueKind) map[string]series {
-	out := make(map[string]series, len(vars))
-	for varName, kind := range vars {
-		s := series{kind: kind}
-		if keySamples, ok := w.buffer[key]; ok {
-			if buffered, ok := keySamples[varName]; ok {
-				s = *buffered
-			}
-		}
-		out[varName] = s
-	}
-	return out
+	w.window.observeDT(scrapeAt)
 }
 
 // newMetricWorker builds a worker from runtime config.
 // Params: cfg runtime settings; sink event consumer; logger root logger.
 // Returns: worker instance or error.
 func newMetricWorker(cfg WorkerConfig, sink Sink, logger *slog.Logger) (*metricWorker, error) {
+	if sink == nil {
+		return nil, fmt.Errorf("sink is required")
+	}
+	if logger == nil {
+		return nil, fmt.Errorf("logger is required")
+	}
 	if cfg.Collector == nil {
 		return nil, fmt.Errorf("collector is required")
 	}
@@ -254,11 +120,20 @@ func newMetricWorker(cfg WorkerConfig, sink Sink, logger *slog.Logger) (*metricW
 	cfg.Instance = instance
 
 	return &metricWorker{
-		cfg:    cfg,
-		sink:   sink,
-		logger: logger,
-		buffer: make(map[string]map[string]*series),
-		known:  make(map[string]map[string]metrics.ValueKind),
+		cfg: cfg,
+		window: newWindow(windowConfig{
+			Metric:      cfg.Metric,
+			Instance:    cfg.Instance,
+			Percentiles: cfg.Percentiles,
+			Tags:        cfg.Tags,
+			Sink:        sink,
+			Logger:      logger,
+			EmitFilter:  cfg.EmitFilter,
+			KeepKnown:   cfg.KeepKnown,
+			DropVar:     cfg.DropVar,
+			FilterVar:   cfg.FilterVar,
+			DropEvent:   cfg.DropEvent,
+		}),
 	}, nil
 }
 

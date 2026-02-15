@@ -13,8 +13,8 @@ If a detail is not stated here: treat it as unknown and ask the user.
 - CLI: `cmd/magent/main.go` (`-config`, `-version`)
 - Runtime: `internal/app/*` (config+logger+pprof+pipeline)
 - Config: `internal/config/config.go`; example: `config.example.toml`
-- Pipeline: `internal/pipeline/*` (workers, aggregation, filters, collector sink, queue, sender)
-- Metrics: `internal/metrics/*` (cpu/ram/swap/net/disk/fs/process/script)
+- Pipeline: `internal/pipeline/*` (workers, window aggregation, filters, collector sink, queue, sender, http ingest)
+- Metrics: `internal/metrics/*` (built-ins + script + http_client + shared points JSON parser)
 - Vector configs: `deploy/vector/*` (Vector Protocol v2 receiver + VRL flatten)
 - ClickHouse DDL/scripts: `deploy/clickhouse/*`
 - Tests (bash e2e): `docs/tests/*`
@@ -22,8 +22,8 @@ If a detail is not stated here: treat it as unknown and ask the user.
 - Roadmap: `docs/state/detailed_plan.md`; changelog: `docs/state/changelog.md`
 
 ## Architecture/Flow
-1. Worker scrape tick: Collector -> []Point{key, values[var]=Value{raw,kind}}.
-2. Worker window: append samples per `{key,var}` until send tick.
+1. Pull scrape tick (built-ins/script/http-client) OR push ingest (http-server): source -> []Point{key, values[var]=Value{raw,kind}}.
+2. Window aggregator: append samples per `{key,var}` until send tick.
 3. Worker send tick: aggregate window -> Event -> sinks:
    - CollectorSink (fan-out to each `[[collector]]`; batch/failover/queue)
    - LogSink (debug-only JSON)
@@ -32,7 +32,7 @@ If a detail is not stated here: treat it as unknown and ask the user.
 MultiSink dispatch is sequential (no goroutine-per-event overhead). CollectorSink Consume blocks on backpressure (per-collector channel buffer: 4096 events).
 
 ## Time/Window Semantics
-- `dt` (event time): Unix epoch milliseconds; first successful scrape time in the send window; fallback `sendAt - scrapeEvery`. Enforced: `dt < dts`.
+- `dt` (event time): Unix epoch milliseconds; first sample time in the send window (scrapeAt for pull, ingestAt for push); fallback `sendAt - interval`. Enforced: `dt < dts`.
 - `dts` (send time): Unix epoch seconds; set at emit.
 - Percentiles are computed once per send window (not per scrape tick).
 
@@ -94,6 +94,21 @@ Script metrics:
   - required: `path`; `timeout>0` (default 5s); `env` map (default `{}`)
   - `<metric_name>` becomes `event.metric` and ClickHouse table name; keep it ClickHouse-safe (recommended: `[a-z][a-z0-9_]*`)
 
+HTTP server metrics (push):
+- `[[metrics.http_server.<metric_name>]]`:
+  - required: `listen` (host:port), `path` (starts with `/`)
+  - schedule: only `send` (no `scrape`); `max_pending` (default 4096) limits accepted batches in memory
+  - policy on overload: keep old / drop new (HTTP `503`), success returns `204`
+  - accepts `POST` body JSON in the External Metric JSON Contract below
+
+HTTP client metrics (poll):
+- `[[metrics.http_client.<metric_name>]]`:
+  - required: `url`, `timeout>0` (default 5s)
+  - schedule: `scrape` + `send`
+  - HTTP: `GET` only; non-2xx is scrape error
+  - `url` supports placeholders (path-escaped): `{dc},{host},{project},{role},{metric},{instance}`
+  - response JSON uses the External Metric JSON Contract below
+
 ### Collectors / Delivery
 - `[[collector]]` (at least one required):
   - `name` (default `collector-<idx>`), `addr=[host:port,...]` (failover order), `timeout` (default 5s), `retry_interval` (default 3s)
@@ -135,7 +150,9 @@ Keys are always strings; values are normalized as above.
   - `readonly` (0/1)
 - `process`: key `proc.Name` (not pid/cmdline); vars: `cpu_util` (% clamped 0..100), `ram_util` (% of host), `iops` (ops/s). Note: multiple PIDs with same Name collide under same key.
 
-## Script Metric Contract (stdout JSON)
+## External Metric JSON Contract (script/http)
+- Used by: script stdout, http-server POST body, http-client GET response.
+- Max payload size: 16 MiB (`metrics.MaxPointsJSONBytes`).
 - root: object or array of objects (each object -> one Point)
 - object fields: `key` (string, non-empty), `data` (object, non-empty)
 - `data.<var>` supports:
@@ -173,6 +190,8 @@ Keys are always strings; values are normalized as above.
   - `bash docs/tests/run_agent_vector_clickhouse.sh [db] [table]`
   - `bash docs/tests/run_all_metrics_queue_batch.sh [db]`
   - `bash docs/tests/run_collector_delivery_modes.sh [failover_db] [multi_db_a] [multi_db_b]`
+  - `bash docs/tests/run_http_server_e2e.sh [db]`
+  - `bash docs/tests/run_http_client_e2e.sh [db]`
   - `bash docs/tests/run_p19_max_load.sh [db] [duration_s]`
   - `bash docs/tests/run_soak_pprof.sh [db] [soak_seconds] [cpu_profile_seconds]` -> `/tmp/magent-soak-pprof/*`
   - `bash docs/tests/chaos_failover/run.sh [chaos_seconds] [drain_timeout_s]`
@@ -182,4 +201,4 @@ Known test-script quirks (do not change semantics):
 
 ## Project plan (status snapshot)
 - Detailed roadmap: `docs/state/detailed_plan.md`.
-- Current: P#1..P#20 DONE; P#21 OPEN.
+- Current: P#1..P#20 DONE; P#21 OPEN; P#22 DONE; P#23 DONE.
