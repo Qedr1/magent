@@ -15,7 +15,10 @@
   - `bash ./deploy/clickhouse/create_builtin_tables.sh metrics`
 - Default tables: `cpu,ram,swap,net,disk,fs,process`
 
-## Create one script table
-- Command:
-  - `bash ./deploy/clickhouse/create_script_table.sh metrics db`
-- Here `db` is script metric name from `[[metrics.script.db]]`
+## Create script metric tables
+Script metrics use the same schema; the table name must match `event.metric` (e.g. `[[metrics.script.db]]` -> table `db`).
+
+- Create one:
+  - `bash ./deploy/clickhouse/create_builtin_tables.sh metrics "db"`
+- Create multiple:
+  - `bash ./deploy/clickhouse/create_builtin_tables.sh metrics "db,chaos"`

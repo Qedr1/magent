@@ -97,6 +97,7 @@ chmod +x "${METRIC_SCRIPT_DST}"
 cd "${ROOT_DIR}"
 go build -o "${AGENT_BIN}" ./cmd/magent
 
+bash "${ROOT_DIR}/deploy/clickhouse/create_builtin_tables.sh" "metrics" "chaos"
 clickhouse-client --query "TRUNCATE TABLE IF EXISTS metrics.chaos"
 
 echo "start=$(now_ts)"

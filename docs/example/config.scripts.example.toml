@@ -1,0 +1,48 @@
+[global]
+dc = "dc1"
+project = "example"
+role = "scripts"
+host = ""
+
+[log.console]
+enabled = true
+level = "info"
+format = "line"
+
+[log.file]
+enabled = false
+level = "info"
+format = "json"
+path = "./var/log/magent.log"
+
+[metrics]
+scrape = "5s"
+send = "30s"
+percentiles = [50, 90, 99]
+
+[[metrics.script.demo_bash]]
+name = "demo-bash"
+path = "./docs/example/scripts/metric-static.sh"
+timeout = "1s"
+
+[[metrics.script.demo_python]]
+name = "demo-python"
+path = "./docs/example/scripts/metric-static.py"
+timeout = "1s"
+
+[[collector]]
+name = "vector-local"
+addr = ["127.0.0.1:6000"]
+timeout = "3s"
+retry_interval = "2s"
+
+[collector.batch]
+max_events = 200
+max_age = "5s"
+
+[collector.queue]
+enabled = false
+dir = "./var/queue/vector-local"
+max_events = 100000
+max_age = "24h"
+

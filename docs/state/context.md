@@ -1,81 +1,185 @@
-# PASP Context
+# Project Context (magent)
 
-## Stack/Versions
-- Go: 1.23.1
+This file is the single, self-contained global technical spec + current state for the project (agent-only source of truth).
+If a detail is not stated here: treat it as unknown and ask the user.
+
+## Stack/Versions (validated in this env)
+- Go: 1.23.1 (`go.mod`)
 - Vector: 0.53.0
-- ClickHouse client: 25.11.1.558
+- ClickHouse: 25.11.1.558
 - gopsutil: v4.25.9
 
-## Runtime/Config
-- Runtime: Linux; config format: TOML with `${VAR}` expansion.
-- Required global tags: `dc`, `project`, `role`; `host` fallback: `os.Hostname()`.
-- Worker model: one async worker per metric instance; global `scrape/send` with per-worker override.
-- Delivery model: per-collector batching + failover by `addr[]` + optional disk queue per collector.
+## Repo Map
+- CLI: `cmd/magent/main.go` (`-config`, `-version`)
+- Runtime: `internal/app/*` (config+logger+pprof+pipeline)
+- Config: `internal/config/config.go`; example: `config.example.toml`
+- Pipeline: `internal/pipeline/*` (workers, aggregation, filters, collector sink, queue, sender)
+- Metrics: `internal/metrics/*` (cpu/ram/swap/net/disk/fs/process/script)
+- Vector configs: `deploy/vector/*` (Vector Protocol v2 receiver + VRL flatten)
+- ClickHouse DDL/scripts: `deploy/clickhouse/*`
+- Tests (bash e2e): `docs/tests/*`
+- Examples: `docs/example/*` (script metric examples + config)
+- Roadmap: `docs/state/detailed_plan.md`; changelog: `docs/state/changelog.md`
 
-## Invariants
-- Unified event schema from agent: `dt,dts,metric,dc,host,project,role,key,data`.
-- Built-in metric names are emitted in lower-case: `cpu,ram,swap,net,disk,fs,process`.
-- `key` is mandatory string; default `"total"` if natural key is absent.
-- `data` shape: `var -> {last,pXX...}`.
-- NET/DISK byte metrics are unified: `rx_bytes`,`tx_bytes`,`rx_bytes_per_sec`,`tx_bytes_per_sec`.
-- Output normalization: non-percent -> `uint64`, percent -> `uint8`, math rounding.
-- `0` is a valid sample; if samples `<4`, all `pXX=0`.
-- Percentiles are computed at send window, not at scrape tick.
-- PROCESS emit: OR-threshold over `cpu_util|ram_util|iops`; no thresholds -> worker skipped.
+## Architecture/Flow
+1. Worker scrape tick: Collector -> []Point{key, values[var]=Value{raw,kind}}.
+2. Worker window: append samples per `{key,var}` until send tick.
+3. Worker send tick: aggregate window -> Event -> sinks:
+   - CollectorSink (fan-out to each `[[collector]]`; batch/failover/queue)
+   - LogSink (debug-only JSON)
+4. Transport: Vector Protocol v2 over gRPC -> Vector `source=vector(version=2)` -> VRL `remap` flattens -> ClickHouse sink inserts into per-metric tables.
 
-## Current Implementation State
-- Core runtime/config/logger: implemented and validated.
-- Collectors implemented: `cpu,ram,swap,net,disk,fs,process,script`.
-- Script metrics: `[[metrics.script.<name>]]` with `path/timeout/env`, strict JSON stdout parsing.
-- Filters: `drop_var`, `filter_var`, `drop_event` (`=,!=,>,<`, wildcard `*` for string `=`/`!=`).
-- Transport: Vector Protocol v2 gRPC `PushEventsRequest` (`EventWrapper.log`).
-- Queue: append-only disk queue per collector, persisted offset, retry drain, reject-new on limits.
-- Vector/ClickHouse deploy assets + full local e2e (`agent -> Vector -> ClickHouse`) are present.
-- Test tooling moved to `docs/tests/*`; DB bootstrap helper is `.docs/sql/create_db_and_tables.sh`.
-- Runtime profiling supported by optional `[pprof]` (`listen` host:port).
-- ClickHouse tables use lower-case names and schema: `dt/dts/dtv CODEC(DoubleDelta)`, `ORDER BY (dt, host, key, var)`, `TTL dt + INTERVAL 4 MONTH`.
+MultiSink dispatch is sequential (no goroutine-per-event overhead). CollectorSink Consume blocks on backpressure (per-collector channel buffer: 4096 events).
 
-## Performance State
-- gRPC sender: connection reuse per address (drop/reconnect on send error).
-- Aggregation: one sort per series for all configured percentiles.
-- Wildcard matcher: string matcher (no regex compile in hot path).
-- Log sink: JSON marshal only when debug level is enabled.
-- Queue IO: persistent descriptors + batched/time-based offset sync + close-time forced flush.
-- Collector backpressure: no immediate drop on full channel; wait for space or context cancel.
-- MultiSink dispatch: sequential (no goroutine-per-event overhead).
-- PROCESS collector: pid metadata cache for `name/exe`.
+## Time/Window Semantics
+- `dt` (event time): Unix epoch milliseconds; first successful scrape time in the send window; fallback `sendAt - scrapeEvery`. Enforced: `dt < dts`.
+- `dts` (send time): Unix epoch seconds; set at emit.
+- Percentiles are computed once per send window (not per scrape tick).
 
-## Spec Sync (README)
-- Queue finalization documented as `truncate + offset reset` (not file delete).
-- Internal collector buffer behavior documented as backpressure.
-- Vector transform documented as VRL `remap` without `route`.
+## Event/Data Contract
+- Internal event (`internal/pipeline/event.go`): `dt,dts,metric,dc,host,project,role,key,data`.
+- `key` is always non-empty string: `trim(key)`; empty -> `"total"`.
+- `data` shape: `map[var]map[agg]value`:
+  - aggs: always `last`; plus `pXX` for configured percentiles.
+  - algorithm: nearest-rank percentile over sorted samples; if samples `<4` => all `pXX=0`.
+  - normalization: round; clamp negatives to 0; KindPercent additionally clamps to 0..100 and emits `uint8`, KindNumber emits `uint64`.
+  - `0` is valid and preserved.
+- Transport adds `host_ip` (string) on send: sender dials collector address and injects local source IP into Vector log payload (not part of internal Event struct).
+- Encoding guard: outbound Vector integer field is `int64`; any `uint64 > MaxInt64` is rejected at encode time (batch is dropped with error log).
 
-## Execution detailed plan
-- P#1 [DONE]: Bootstrap/runtime/config/logging baseline.
-- P#2 [DONE]: Core worker lifecycle + window aggregation/normalization.
-- P#3 [DONE]: Built-in collectors wave1 (`cpu,ram,swap,net`).
-- P#4 [DONE]: Built-in collectors wave2 (`disk,fs,process`) + OR-threshold.
-- P#5 [DONE]: Variable/event filters.
-- P#6 [DONE]: Collector delivery (batch/failover/queue/Vector gRPC sender).
-- P#7 [DONE]: Script metrics end-to-end + config validation.
-- P#8 [DONE]: Config/examples/tests for script sections.
-- P#9 [DONE]: Console token coloring rules (`string/ip/number`) for line format.
-- P#10 [DONE]: Vector intake/flatten/log configuration.
-- P#11 [DONE]: Vector flatten smoke + docs/examples.
-- P#12 [DONE]: ClickHouse schema/bootstrap scripts.
-- P#13 [DONE]: Full e2e `agent -> Vector -> ClickHouse`.
-- P#14 [DONE]: Perf hot-path wave1 (`conn reuse`, aggregation, wildcard, log marshal guard).
-- P#15 [DONE]: Perf hot-path wave2 (disk queue IO optimization).
-- P#16 [DONE]: Perf hot-path wave3 (collector backpressure).
-- P#17 [DONE]: Perf hot-path wave4 (MultiSink dispatch simplification).
-- P#18 [DONE]: Perf hot-path wave5 (PROCESS metadata cache).
-- P#19 [DONE]: Benchmark/pprof baseline vs current and capture numeric delta.
-- P#20 [DONE]: Delivery modes coverage (`failover` in one collector + dual collectors fan-out) with unit+e2e checks.
-- P#21 [OPEN]: 5h soak run (`scrape=10s`, `send=60s`, `pprof=on`) and final profile review.
+## Config (TOML; `${VAR}` expanded before decode)
+Load pipeline: read file -> `os.ExpandEnv` -> TOML decode -> defaults -> validation (`internal/config/config.go`).
 
-## Validation
-- Latest checks pass: `go test ./...`, `go test -race ./...`, `go vet ./...`.
-- E2E pass: `run_agent_vector_clickhouse.sh`, `run_all_metrics_queue_batch.sh`.
-- E2E pass: `run_collector_delivery_modes.sh` (failover rows>0, multi rows>0 for both collectors).
-- E2E pass: net duplex verification (`download->rx`, `upload->tx`) with DB-backed ratio checks (`status=PASS`).
-- P#19 max-load (60s): total `338064` rows, approx `5634.40 rows/s`.
+### `[global]` (required)
+- required: `dc`, `project`, `role` (non-empty)
+- optional: `host` (default `os.Hostname()`)
+
+### Logging
+- `[log.console]`: `enabled`, `level=debug|info|warn|error|panic`, `format=line|json`
+- `[log.file]`: same + `path` (required when enabled)
+- defaults: console `enabled` if both sinks disabled; console `level=info`, `format=line`; file `format=json`.
+- console `line` is colored (level + token highlighting); JSON never colored.
+
+### Pprof
+- `[pprof]`: `enabled`, `listen` (host:port; default `127.0.0.1:6060` when enabled)
+- endpoints: `/debug/pprof/*`
+
+### ClickHouse (tooling-only for now)
+- `[db.clickhouse]`: `host`(127.0.0.1), `port`(8123), `database`(metrics), `user`(default), `password`, `secure`, `dial_timeout`(5s)
+- not used by agent runtime today (kept for docs/tests + future)
+
+### Metric workers
+- Defaults `[metrics]`: `scrape` (<=0 => 5s), `send` (<=0 => 30s), `percentiles` (empty => [50,90,99]).
+- Common worker fields:
+  - `name` (default `<metric>-<idx>`), `scrape`, `send`, `percentiles`
+  - `filter_var` (keep patterns), `drop_var` (drop patterns), `drop_event` (OR conditions)
+
+Metrics:
+- `[[metrics.cpu]]` -> metric `cpu`
+- `[[metrics.ram]]` -> `ram`
+- `[[metrics.swap]]` -> `swap`
+- `[[metrics.net]]` -> `net`
+- `[[metrics.disk]]` -> `disk`
+- `[[metrics.fs]]` -> `fs`
+
+Process metric (special):
+- `[[metrics.process]]`:
+  - thresholds: `cpu_util`/`ram_util` (0..100), `iops` (>=0); OR logic on per-window max
+  - if no thresholds set => worker skipped (warn)
+  - default scrape interval: 20s (unless overridden), independent from `[metrics].scrape`
+  - `KeepKnown=false` (no zero backfill)
+
+Script metrics:
+- `[[metrics.script.<metric_name>]]`:
+  - required: `path`; `timeout>0` (default 5s); `env` map (default `{}`)
+  - `<metric_name>` becomes `event.metric` and ClickHouse table name; keep it ClickHouse-safe (recommended: `[a-z][a-z0-9_]*`)
+
+### Collectors / Delivery
+- `[[collector]]` (at least one required):
+  - `name` (default `collector-<idx>`), `addr=[host:port,...]` (failover order), `timeout` (default 5s), `retry_interval` (default 3s)
+- Batching `[collector.batch]`:
+  - flush when `len(batch) >= max_events` OR `time_since(batch_start) >= max_age` (age check tick: 1s)
+  - defaults: `max_events=200`, `max_age=5s`; must have `max_events>0` or `max_age>0`
+- Disk queue `[collector.queue]` (optional durability):
+  - `enabled`, `dir`, limits `max_events` and/or `max_age` (required when enabled)
+  - files: `queue.bin` (records) + `offset.bin` (read offset); format `[u32 payload_len][u64 created_unix_sec] + payload`
+  - drain on start + every `retry_interval`; full drain => truncate to 0 + offset reset
+  - startup reindex scans from offset and truncates corrupted tail if found
+  - best-effort: if enqueue fails (limits/IO) the batch is dropped (logged)
+
+## Filters
+- `filter_var` / `drop_var`: wildcard `*` match on var names (no regex).
+- `drop_event`: OR list of `<field><op><value>`; ops `= != > <`.
+  - string fields: `metric`, `key` (`*` wildcard only for `=`/`!=`)
+  - `var`: matches against var names present (only `=`/`!=`)
+  - any other field name is treated as `<var_name>` and compared against that var's `last` only.
+
+## Built-in Metric Semantics
+Keys are always strings; values are normalized as above.
+
+- `cpu`: key `total` + `coreN`; var: `util` (%)
+- `ram`: key `total`; vars: `total,used,free` (bytes), `util` (%)
+- `swap`: key `total`; vars: `total,used` (bytes), `util` (%)
+- `net`: key `<iface>`; vars:
+  - `tx_bytes,rx_bytes` (delta bytes since previous scrape)
+  - `tx_bytes_per_sec,rx_bytes_per_sec` (bytes/s)
+  - `tx_pkt,rx_pkt` (pkt/s)
+  - `tx_err,rx_err,tx_drop,rx_drop` (delta counters)
+- `disk`: key `/dev/<name>`; vars:
+  - `rx_io,tx_io` (ops/s)
+  - `rx_bytes,tx_bytes` (delta bytes), `rx_bytes_per_sec,tx_bytes_per_sec` (bytes/s)
+  - `rx_await,tx_await,await` (ms), `qdepth` (avg), `util` (%), `inflight` (count)
+- `fs`: key `<mountpoint>`; vars:
+  - `total,used,free,avail` (bytes; `avail==free`), `util` (%)
+  - `inodes_total,inodes_used,inodes_free` (count), `inodes_util` (%)
+  - `readonly` (0/1)
+- `process`: key `proc.Name` (not pid/cmdline); vars: `cpu_util` (% clamped 0..100), `ram_util` (% of host), `iops` (ops/s). Note: multiple PIDs with same Name collide under same key.
+
+## Script Metric Contract (stdout JSON)
+- root: object or array of objects (each object -> one Point)
+- object fields: `key` (string, non-empty), `data` (object, non-empty)
+- `data.<var>` supports:
+  - bool -> 0/1
+  - number (finite)
+  - object: `{value|last: number, kind?: string}` where kind in `number|num|uint64|percent|pct|%|uint8_percent`
+- Kind inference when kind absent: `util` or `*_util` => percent; else number.
+
+## Vector (Collector) Side: VRL Flattening (no custom parsers)
+- Vector Protocol v2 source listens on `0.0.0.0:6000` in provided configs.
+- Flatten is VRL `remap` only (no `route`):
+  - `base_event = .; del(base_event.data)`
+  - for each `.data[var][agg]` -> emit one row event:
+    - `event = merge(base_event, {"var":var_name,"agg":agg_name,"value":to_int(agg_value) ?? 0})`
+  - `. = events`
+- `key` is preserved via `base_event`.
+- ClickHouse sink (e2e configs): `table = "{{ .metric }}"`, `skip_unknown_fields=true`, `date_time_best_effort=true`.
+
+## ClickHouse Schema/Retention
+- Table-per-metric; schema is identical across all metric tables.
+- Template: `deploy/clickhouse/schema_metric.sql`:
+  - `dt DateTime64(3) CODEC(DoubleDelta)`, `dts DateTime CODEC(DoubleDelta)`, `dtv DateTime DEFAULT now() CODEC(DoubleDelta)`
+  - tags: `dc,host,project,role` (LowCardinality String), `host_ip IPv6 DEFAULT ::`
+  - payload: `key,var,agg` (LowCardinality String), `value UInt64`
+  - `PARTITION BY toYYYYMMDD(dt)`; `ORDER BY (dt, host, key)`; `TTL dt + INTERVAL 4 MONTH`
+- Bootstrap:
+  - built-ins: `bash deploy/clickhouse/create_builtin_tables.sh <db> "cpu,ram,swap,net,disk,fs,process"`
+  - script metrics use the same DDL: `bash deploy/clickhouse/create_builtin_tables.sh <db> "<metric_name_1,metric_name_2>"`
+
+## Ops (Build/Run/Test/E2E)
+- Build: `make build` -> `bin/magent` (prod flags); optional `make build-upx`.
+- Run: `./bin/magent -config <path>` (default config path: `config.toml`).
+- Unit checks (2026-02-15): `go test ./...`, `go test -race ./...`, `go vet ./...` PASS.
+- E2E scripts:
+  - `bash docs/tests/run_agent_vector_clickhouse.sh [db] [table]`
+  - `bash docs/tests/run_all_metrics_queue_batch.sh [db]`
+  - `bash docs/tests/run_collector_delivery_modes.sh [failover_db] [multi_db_a] [multi_db_b]`
+  - `bash docs/tests/run_p19_max_load.sh [db] [duration_s]`
+  - `bash docs/tests/run_soak_pprof.sh [db] [soak_seconds] [cpu_profile_seconds]` -> `/tmp/magent-soak-pprof/*`
+  - `bash docs/tests/chaos_failover/run.sh [chaos_seconds] [drain_timeout_s]`
+
+Known test-script quirks (do not change semantics):
+- `docs/tests/chaos_failover/run.sh` progress log checks queue bytes in `${QUEUE_DIR}/events.bin` but actual queue file is `${QUEUE_DIR}/queue.bin`; PASS criteria is distinct delivered keys, not queue_bytes.
+
+## Project plan (status snapshot)
+- Detailed roadmap: `docs/state/detailed_plan.md`.
+- Current: P#1..P#20 DONE; P#21 OPEN.

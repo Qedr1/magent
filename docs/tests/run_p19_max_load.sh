@@ -45,7 +45,7 @@ cd "${ROOT_DIR}"
 clickhouse-client --query "SELECT 1 FORMAT TSV" >/dev/null
 
 bash "${ROOT_DIR}/deploy/clickhouse/create_builtin_tables.sh" "${DB_NAME}" "cpu,ram,swap,net,disk,fs,process"
-bash "${ROOT_DIR}/deploy/clickhouse/create_script_table.sh" "${DB_NAME}" "db"
+bash "${ROOT_DIR}/deploy/clickhouse/create_builtin_tables.sh" "${DB_NAME}" "db"
 truncate_tables cpu ram swap net disk fs process db
 
 cat > "${SCRIPT_METRIC_PATH}" <<'SCRIPT'
