@@ -1,26 +1,26 @@
 # Агент сбора метрик Linux
 Golang, ClickHouse, vector, gRPC, gopsutil
 
-## Тесты
+## Стресс-тесты
 magent
 ```
 - file size: 5.2 MB
 - vCPU:1
-- RES mem: 28MB
-- RAM total: 256MB
+- RES mem: 18MB
+- RAM total: 128MB
 - LAN: ~28 Mb/c
 
-~18801 метрик в секунду.
+~18 801 метрик в секунду.
 ```
 коллектор (vector)
 ```
 - file size: 136 MB
 - vCPU:2
-- RES mem: 125MB
+- RES mem: 82MB
 - RAM total: 512MB
 - LAN: ~819 Mb/c
 
-~240381 метрик в секунду.
+~240 381 метрик в секунду.
 ```
 
 ## Принцип
@@ -169,6 +169,7 @@ LowCardinality снижает накладные расходы на дубли�
 
 ### DISK
 - key: путь к блочному устройству (`/dev/...`). string
+- собираются только базовые блочные устройства; партиции игнорируются (`/dev/sda1`, `/dev/sda2`, `/dev/nvme0n1p1`, `/dev/mmcblk0p1`)
 - rx_io: операций чтения в секунду. uint64, операций/сек
 - tx_io: операций записи в секунду. uint64, операций/сек
 - rx_bytes: прочитано байт за интервал опроса. uint64, bytes
@@ -279,6 +280,17 @@ LowCardinality снижает накладные расходы на дубли�
 - drop_event дропает событие целиком если одно или несколько условий выполнены. формат условия: `<field><op><value>`, где `op` in `=`, `!=`, `>`, `<`.
 - для строк с `=` и `!=` поддерживается wildcard `*` (пример: `cmd=*postgres*`, `key!=core*`)
 - пример: `drop_event = ["iops>10000","key!=core*","var=rx_*"]`
+- пример фильтрации по DISK ключам:
+```toml
+[[metrics.disk]]
+name = "disk-main"
+drop_event = ["key=/dev/loop*", "key=/dev/ram*"]
+
+[[metrics.disk]]
+name = "disk-nvme-only"
+drop_event = ["key!=/dev/nvme*"]
+filter_var = ["util", "*_bytes", "*_bytes_per_sec"]
+```
 - теги не попадают под drop_var/filter_var/drop_event
 - таймаут выполнения скриптов, в секундах. по умолчанию 5с. опционально
 - путь к скрипту для метрик из внешних скриптов. обязательно только в секции вызова скриптов

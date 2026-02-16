@@ -32,3 +32,5 @@ Status rules: `OPEN` by default; set to `DONE` only after user OK + tests pass; 
 - P#28 [DONE]: Implement optimization wave from P#27 (sender fast-path, typed external JSON parse, window alloc cuts, script env cache), rerun 10-minute all-metrics pprof, and confirm alloc/cpu reduction with full-metric pass.
 - P#29 [OPEN]: Add built-in `metrics.netflow` collector without cgo (AF_PACKET), support multiple interfaces via wildcard masks, aggregate top-N flow tuples, and validate full e2e to ClickHouse `netflow` + `netflow_pairs`.
 - P#31 [DONE]: Validate built-in netflow delivery path uses the shared pipeline, remove legacy external-netflow references/files, add root-rights note for netflow config, and deduplicate/optimize netflow code.
+- P#33 [DONE]: Filter `disk` metric keys to base block devices only (exclude partitions), add unit coverage for device classification/scrape filtering, rebuild/restart runtime agent, and verify ClickHouse emits only base disk keys in recent window.
+- P#34 [DONE]: Update user README with explicit DISK partition-ignore behavior and add practical disk filter examples (`drop_event` + `filter_var`).
