@@ -251,13 +251,15 @@ LowCardinality снижает накладные расходы на дубли�
 ### HTTP-CLIENT
 Пользовательская pull-метрика: агент делает `GET` по URL, парсит JSON-ответ и отправляет данные по общим правилам.
 - секция конфига: `[[metrics.http_client.<name>]]`
-- key: строковый идентификатор сущности метрики; приходит из поля `key` каждой сущности в JSON-ответе.
+- key: строковый идентификатор сущности метрики; для `json` берётся из поля `key`, для `prometheus` собирается из `key_from_labels`.
+- поддерживаемые форматы ответа: `format=json` (контракт `{key,data}`) и `format=prometheus` (text exposition, только gauge/counter)
+- для `format=prometheus`: `include` (разрешённые имена метрик), `key_from_labels` (из каких labels формируется key), `var_mode=full|short`
 - HTTP: `GET` (пока только GET); ответ должен быть JSON того же формата что и у внешних скриптов (см. ниже)
 - `url` поддерживает переменные в пути (path-escaped): `{dc},{host},{project},{role},{metric},{instance}`
 - `instance` = имя воркера (`name` в конфиге или автогенерированное), используется только для URL и логов (в событие/БД не попадает)
 
 ### Формат внешних источников (SCRIPT/HTTP)
-- один и тот же формат для: stdout скрипта, body HTTP-SERVER, response HTTP-CLIENT
+- один и тот же JSON-формат для: stdout скрипта, body HTTP-SERVER, response HTTP-CLIENT при `format=json`
 - root: объект или массив объектов; каждый объект = 1 сущность метрики (1 `key`)
 - минимальный пример:
 ```json
@@ -277,6 +279,7 @@ LowCardinality снижает накладные расходы на дубли�
 
 ### Конфиг
 - раздел [metrics] параметры по умолчанию для всех метрик. [[metrics.<name>]] раздел конкретной метрики. [[metrics.script.<name>]] метрика собираемая внешним скриптом. [[metrics.http_server.<name>]] push HTTP метрика. [[metrics.http_client.<name>]] pull HTTP метрика
+- для `[[metrics.http_client.<name>]]`: `format` по умолчанию `json`; для `prometheus` обязательны `include`, доступны `key_from_labels`, `var_mode=full|short`
 - `percentiles` опциональны в `[metrics]` и в `[[metrics.<name>]]`
 - `percentiles` — массив целых значений (например `[50,90,99]`); ключи в JSON формируются как `pXX`
 - если `percentiles` не заданы ни глобально, ни в метрике, агрегируется только `last` (без `pXX`)

@@ -76,6 +76,12 @@
 - Run:
   - `bash ./docs/tests/run_http_client_e2e.sh`
 
+- Script: `docs/tests/run_http_client_vector_prom_e2e.sh`
+- Flow: `Vector internal_metrics + prometheus_exporter -> http-client (GET Prometheus text) -> agent -> Vector -> ClickHouse`
+- Run:
+  - `bash ./docs/tests/run_http_client_vector_prom_e2e.sh`
+  - `bash ./docs/tests/run_http_client_vector_prom_e2e.sh <db_name>`
+
 ## Built-in netflow e2e
 
 - Script: `docs/tests/run_netflow_builtin_e2e.sh`

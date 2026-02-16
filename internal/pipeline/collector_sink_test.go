@@ -331,6 +331,56 @@ func (s *retrySender) Calls() int {
 	return s.sendCalls
 }
 
+type cancelAwareSender struct {
+	mu          sync.Mutex
+	successful  int
+	sendBatches int
+}
+
+// Encode is unused in this sender.
+// Params: events ignored.
+// Returns: static payload.
+func (s *cancelAwareSender) Encode(_ []Event) ([]byte, error) {
+	return []byte("payload"), nil
+}
+
+// SendBatch succeeds only with non-canceled contexts.
+// Params: ctx/address/events/timeout.
+// Returns: context error when canceled.
+func (s *cancelAwareSender) SendBatch(ctx context.Context, _ string, _ []Event, _ time.Duration) error {
+	s.mu.Lock()
+	s.sendBatches++
+	s.mu.Unlock()
+
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	s.successful++
+	s.mu.Unlock()
+	return nil
+}
+
+// Send succeeds only with non-canceled contexts.
+// Params: ctx/address/payload/timeout.
+// Returns: context error when canceled.
+func (s *cancelAwareSender) Send(ctx context.Context, _ string, _ []byte, _ time.Duration) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return nil
+}
+
+// Successful returns count of successful SendBatch calls.
+// Params: none.
+// Returns: successful call count.
+func (s *cancelAwareSender) Successful() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.successful
+}
+
 // TestCollectorWorker_RetryDrainsQueue verifies queued payload is retried and acked by retry ticker.
 // Params: testing.T for assertions.
 // Returns: none.
@@ -406,6 +456,52 @@ func TestCollectorWorker_RetryDrainsQueue(t *testing.T) {
 	}
 	if sender.Calls() < 3 {
 		t.Fatalf("expected at least three send attempts, got %d", sender.Calls())
+	}
+}
+
+// TestCollectorWorker_RunFlushesBatchOnShutdown verifies final flush uses graceful context after cancellation.
+// Params: testing.T for assertions.
+// Returns: none.
+func TestCollectorWorker_RunFlushesBatchOnShutdown(t *testing.T) {
+	sender := &cancelAwareSender{}
+
+	worker := &collectorWorker{
+		name: "c1",
+		cfg: config.CollectorConfig{
+			Addr:          []string{"127.0.0.1:6000"},
+			Timeout:       config.Duration{Duration: 50 * time.Millisecond},
+			RetryInterval: config.Duration{Duration: time.Hour},
+			Batch: config.CollectorBatchConfig{
+				MaxEvents: 100,
+				MaxAge:    config.Duration{Duration: time.Minute},
+			},
+		},
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		sender: sender,
+		input:  make(chan Event, 1),
+		batch: []Event{
+			{Metric: "cpu", Key: "total"},
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		worker.run(ctx)
+		close(done)
+	}()
+
+	time.Sleep(20 * time.Millisecond)
+	cancel()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("worker did not stop after cancel")
+	}
+
+	if sender.Successful() == 0 {
+		t.Fatalf("expected final shutdown flush to send at least one batch")
 	}
 }
 

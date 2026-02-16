@@ -12,6 +12,7 @@ DB_NAME="${1:-metrics_http_client_e2e}"
 TABLE_NAME="http_client_demo"
 SRC_ADDR="127.0.0.1:18091"
 SRC_PATH="/metrics"
+COLLECTOR_ADDR="127.0.0.1:16001"
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 AGENT_LOG="/tmp/magent-http-client-e2e.log"
@@ -71,6 +72,7 @@ sleep 1
 
 sed \
   -e "s/database = \"metrics\"/database = \"${DB_NAME}\"/" \
+  -e 's/address = "0.0.0.0:6000"/address = "0.0.0.0:16001"/' \
   -e 's/timeout_secs = 5/timeout_secs = 1/' \
   "${ROOT_DIR}/deploy/vector/clickhouse-e2e.toml" > "${VECTOR_CONFIG}"
 
@@ -109,7 +111,7 @@ timeout = "1s"
 
 [[collector]]
 name = "vector-local"
-addr = ["127.0.0.1:6000"]
+addr = ["${COLLECTOR_ADDR}"]
 timeout = "2s"
 retry_interval = "1s"
 

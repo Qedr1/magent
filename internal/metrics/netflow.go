@@ -2,6 +2,7 @@ package metrics
 
 import (
 	"bytes"
+	"container/heap"
 	"context"
 	"encoding/binary"
 	"fmt"
@@ -28,6 +29,8 @@ const (
 
 	ipProtocolTCP = 6
 	ipProtocolUDP = 17
+
+	netflowCounterShards = 64
 )
 
 type flowTuple struct {
@@ -48,6 +51,11 @@ type flowCounter struct {
 	packets uint64
 }
 
+type flowCounterShard struct {
+	mu       sync.Mutex
+	counters map[flowTuple]flowCounter
+}
+
 type packetSource struct {
 	iface string
 	fd    int
@@ -61,11 +69,11 @@ type NETFLOWCollector struct {
 	ifaceMasks []string
 	topN       int
 
-	mu       sync.Mutex
-	started  bool
-	stopped  bool
-	sources  map[string]*packetSource
-	counters map[flowTuple]flowCounter
+	mu      sync.Mutex
+	started bool
+	stopped bool
+	sources map[string]*packetSource
+	shards  []flowCounterShard
 }
 
 // NewNETFLOWCollector creates a built-in netflow collector.
@@ -86,12 +94,17 @@ func NewNETFLOWCollector(metricName string, ifaceMasks []string, topN uint32) *N
 		limit = 20
 	}
 
+	shards := make([]flowCounterShard, netflowCounterShards)
+	for idx := range shards {
+		shards[idx].counters = make(map[flowTuple]flowCounter, 64)
+	}
+
 	return &NETFLOWCollector{
 		metricName: strings.TrimSpace(metricName),
 		ifaceMasks: masks,
 		topN:       limit,
 		sources:    make(map[string]*packetSource),
-		counters:   make(map[flowTuple]flowCounter),
+		shards:     shards,
 	}
 }
 
@@ -207,18 +220,19 @@ func (c *NETFLOWCollector) captureLoop(source *packetSource) {
 			continue
 		}
 
-		tuple, packetBytes, ok := parseFlowTuple(source.iface, buffer[:n])
-		if !ok {
-			continue
-		}
+			tuple, packetBytes, ok := parseFlowTuple(source.iface, buffer[:n])
+			if !ok {
+				continue
+			}
 
-		c.mu.Lock()
-		counter := c.counters[tuple]
-		counter.bytes += packetBytes
-		counter.packets++
-		c.counters[tuple] = counter
-		c.mu.Unlock()
-	}
+			shard := c.counterShard(tuple)
+			shard.mu.Lock()
+			counter := shard.counters[tuple]
+			counter.bytes += packetBytes
+			counter.packets++
+			shard.counters[tuple] = counter
+			shard.mu.Unlock()
+		}
 }
 
 // stop closes all packet sockets and marks collector as stopped.
@@ -243,12 +257,75 @@ func (c *NETFLOWCollector) stop() {
 // Params: none.
 // Returns: snapshot of counters since previous scrape.
 func (c *NETFLOWCollector) swapCounters() map[flowTuple]flowCounter {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	snapshot := make(map[flowTuple]flowCounter)
+	for idx := range c.shards {
+		shard := &c.shards[idx]
 
-	snapshot := c.counters
-	c.counters = make(map[flowTuple]flowCounter, len(snapshot))
+		shard.mu.Lock()
+		if len(shard.counters) == 0 {
+			shard.mu.Unlock()
+			continue
+		}
+
+		for tuple, counter := range shard.counters {
+			snapshot[tuple] = counter
+		}
+		shard.counters = make(map[flowTuple]flowCounter, len(shard.counters))
+		shard.mu.Unlock()
+	}
+
 	return snapshot
+}
+
+// counterShard resolves counter shard for tuple updates.
+// Params: tuple flow identity.
+// Returns: pointer to shard storing this tuple.
+func (c *NETFLOWCollector) counterShard(tuple flowTuple) *flowCounterShard {
+	hash := hashFlowTuple(tuple)
+	index := int(hash % uint64(len(c.shards)))
+	return &c.shards[index]
+}
+
+// hashFlowTuple computes stable hash for one flow tuple.
+// Params: tuple flow identity.
+// Returns: unsigned hash value.
+func hashFlowTuple(tuple flowTuple) uint64 {
+	const (
+		offset = uint64(1469598103934665603)
+		prime  = uint64(1099511628211)
+	)
+
+	hash := offset
+	for idx := 0; idx < len(tuple.iface); idx++ {
+		hash ^= uint64(tuple.iface[idx])
+		hash *= prime
+	}
+
+	hash ^= uint64(tuple.proto)
+	hash *= prime
+	if tuple.srcV4 {
+		hash ^= 1
+	}
+	hash *= prime
+	if tuple.dstV4 {
+		hash ^= 1
+	}
+	hash *= prime
+
+	for _, byteValue := range tuple.srcAddr {
+		hash ^= uint64(byteValue)
+		hash *= prime
+	}
+	for _, byteValue := range tuple.dstAddr {
+		hash ^= uint64(byteValue)
+		hash *= prime
+	}
+
+	hash ^= uint64(tuple.srcPort)
+	hash *= prime
+	hash ^= uint64(tuple.dstPort)
+	hash *= prime
+	return hash
 }
 
 // resolveMatchingInterfaces expands wildcard patterns to active interfaces.
@@ -503,61 +580,137 @@ transport:
 	return tuple, uint64(totalLength), true
 }
 
+type flowRow struct {
+	tuple   flowTuple
+	counter flowCounter
+}
+
+type flowTopHeap struct {
+	rows  []flowRow
+	limit int
+}
+
+// Len reports current heap length.
+// Params: none.
+// Returns: element count.
+func (h flowTopHeap) Len() int {
+	return len(h.rows)
+}
+
+// Less defines min-heap order where root is the "worst" row among kept top-N.
+// Params: i/j indexes in heap storage.
+// Returns: true when row i must be ordered before row j.
+func (h flowTopHeap) Less(i, j int) bool {
+	return flowRowBetter(h.rows[j], h.rows[i])
+}
+
+// Swap swaps heap elements.
+// Params: i/j indexes in heap storage.
+// Returns: none.
+func (h flowTopHeap) Swap(i, j int) {
+	h.rows[i], h.rows[j] = h.rows[j], h.rows[i]
+}
+
+// Push appends one element into heap storage.
+// Params: value heap element.
+// Returns: none.
+func (h *flowTopHeap) Push(value any) {
+	h.rows = append(h.rows, value.(flowRow))
+}
+
+// Pop removes and returns last heap element.
+// Params: none.
+// Returns: removed heap element.
+func (h *flowTopHeap) Pop() any {
+	last := len(h.rows) - 1
+	item := h.rows[last]
+	h.rows = h.rows[:last]
+	return item
+}
+
+// Offer inserts one row while preserving only top-N best rows.
+// Params: row candidate.
+// Returns: none.
+func (h *flowTopHeap) Offer(row flowRow) {
+	if h.limit <= 0 {
+		return
+	}
+
+	if len(h.rows) < h.limit {
+		heap.Push(h, row)
+		return
+	}
+	if flowRowBetter(row, h.rows[0]) {
+		h.rows[0] = row
+		heap.Fix(h, 0)
+	}
+}
+
+// flowRowBetter compares rows using stable top ordering.
+// Params: left/right rows.
+// Returns: true when left should be ranked before right.
+func flowRowBetter(left, right flowRow) bool {
+	if left.counter.bytes != right.counter.bytes {
+		return left.counter.bytes > right.counter.bytes
+	}
+	if left.counter.packets != right.counter.packets {
+		return left.counter.packets > right.counter.packets
+	}
+	if left.tuple.iface != right.tuple.iface {
+		return left.tuple.iface < right.tuple.iface
+	}
+	if left.tuple.proto != right.tuple.proto {
+		return left.tuple.proto < right.tuple.proto
+	}
+	if left.tuple.srcV4 != right.tuple.srcV4 {
+		return left.tuple.srcV4
+	}
+	if cmp := bytes.Compare(left.tuple.srcAddr[:], right.tuple.srcAddr[:]); cmp != 0 {
+		return cmp < 0
+	}
+	if left.tuple.srcPort != right.tuple.srcPort {
+		return left.tuple.srcPort < right.tuple.srcPort
+	}
+	if left.tuple.dstV4 != right.tuple.dstV4 {
+		return left.tuple.dstV4
+	}
+	if cmp := bytes.Compare(left.tuple.dstAddr[:], right.tuple.dstAddr[:]); cmp != 0 {
+		return cmp < 0
+	}
+	return left.tuple.dstPort < right.tuple.dstPort
+}
+
 // buildFlowPoints converts tuple counters into sorted top-N metric points.
 // Params: counters snapshot map; topN limit.
 // Returns: sorted point slice.
 func buildFlowPoints(counters map[flowTuple]flowCounter, topN int) []Point {
-	type row struct {
-		tuple   flowTuple
-		counter flowCounter
+	if len(counters) == 0 {
+		return nil
 	}
 
-	rows := make([]row, 0, len(counters))
-	for tuple, counter := range counters {
-		rows = append(rows, row{
-			tuple:   tuple,
-			counter: counter,
-		})
-	}
-
-	sort.Slice(rows, func(i, j int) bool {
-		if rows[i].counter.bytes != rows[j].counter.bytes {
-			return rows[i].counter.bytes > rows[j].counter.bytes
-		}
-		if rows[i].counter.packets != rows[j].counter.packets {
-			return rows[i].counter.packets > rows[j].counter.packets
-		}
-		if rows[i].tuple.iface != rows[j].tuple.iface {
-			return rows[i].tuple.iface < rows[j].tuple.iface
-		}
-		if rows[i].tuple.proto != rows[j].tuple.proto {
-			return rows[i].tuple.proto < rows[j].tuple.proto
-		}
-		if rows[i].tuple.srcV4 != rows[j].tuple.srcV4 {
-			return rows[i].tuple.srcV4
-		}
-		if cmp := bytes.Compare(rows[i].tuple.srcAddr[:], rows[j].tuple.srcAddr[:]); cmp != 0 {
-			return cmp < 0
-		}
-		if rows[i].tuple.srcPort != rows[j].tuple.srcPort {
-			return rows[i].tuple.srcPort < rows[j].tuple.srcPort
-		}
-		if rows[i].tuple.dstV4 != rows[j].tuple.dstV4 {
-			return rows[i].tuple.dstV4
-		}
-		if cmp := bytes.Compare(rows[i].tuple.dstAddr[:], rows[j].tuple.dstAddr[:]); cmp != 0 {
-			return cmp < 0
-		}
-		return rows[i].tuple.dstPort < rows[j].tuple.dstPort
-	})
-
-	limit := len(rows)
+	limit := len(counters)
 	if topN > 0 && topN < limit {
 		limit = topN
 	}
 
-	points := make([]Point, 0, limit)
-	for idx := 0; idx < limit; idx++ {
+	top := &flowTopHeap{
+		rows:  make([]flowRow, 0, limit),
+		limit: limit,
+	}
+	heap.Init(top)
+
+	for tuple, counter := range counters {
+		top.Offer(flowRow{tuple: tuple, counter: counter})
+	}
+
+	rows := make([]flowRow, len(top.rows))
+	copy(rows, top.rows)
+	sort.Slice(rows, func(i, j int) bool {
+		return flowRowBetter(rows[i], rows[j])
+	})
+
+	points := make([]Point, 0, len(rows))
+	for idx := range rows {
 		row := rows[idx]
 		points = append(points, Point{
 			Key: formatFlowKey(row.tuple),
@@ -608,7 +761,3 @@ func formatIP(addr [16]byte, isV4 bool) string {
 	}
 	return netip.AddrFrom16(addr).String()
 }
-
-// wildcardMatch evaluates '*' wildcard pattern against value.
-// Params: pattern may contain '*' wildcards; value is compared text.
-// Returns: true on pattern match.

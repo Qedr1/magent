@@ -79,6 +79,12 @@ func buildHTTPClientWorkers(
 						metric,
 						resolvedURL,
 						definition.Timeout.Duration,
+						metrics.HTTPClientCollectorOptions{
+							Format:        definition.Format,
+							Include:       definition.Include,
+							KeyFromLabels: definition.KeyFromLabels,
+							VarMode:       definition.VarMode,
+						},
 					),
 					Tags:      tags,
 					KeepKnown: true,
@@ -127,16 +133,25 @@ func buildHTTPServerRunners(
 
 	groups := make(map[string]*serverGroup)
 	out := make([]runner, 0)
+	cleanupServers := func() {
+		for _, group := range groups {
+			if group == nil || group.srv == nil || group.srv.ln == nil {
+				continue
+			}
+			_ = group.srv.ln.Close()
+		}
+	}
 
 	for _, metricName := range metricNames {
 		metric := strings.TrimSpace(metricName)
 		definitions := cfg.Metrics.HTTPServer[metricName]
 
-		for idx, definition := range definitions {
-			dropConditions, err := compileDropConditions(definition.DropEvent)
-			if err != nil {
-				return nil, fmt.Errorf("build http_server worker %s[%d]: %w", metric, idx, err)
-			}
+			for idx, definition := range definitions {
+				dropConditions, err := compileDropConditions(definition.DropEvent)
+				if err != nil {
+					cleanupServers()
+					return nil, fmt.Errorf("build http_server worker %s[%d]: %w", metric, idx, err)
+				}
 
 			sendEvery := cfg.Metrics.Send.Duration
 			if sendEvery <= 0 {
@@ -168,10 +183,11 @@ func buildHTTPServerRunners(
 				},
 				sink,
 				logger,
-			)
-			if err != nil {
-				return nil, fmt.Errorf("build http_server worker %s[%d]: %w", metric, idx, err)
-			}
+				)
+				if err != nil {
+					cleanupServers()
+					return nil, fmt.Errorf("build http_server worker %s[%d]: %w", metric, idx, err)
+				}
 
 			out = append(out, worker)
 
@@ -181,10 +197,11 @@ func buildHTTPServerRunners(
 			group := groups[listen]
 			if group == nil {
 				mux := http.NewServeMux()
-				srv, err := newHTTPIngestServer(listen, mux, logger)
-				if err != nil {
-					return nil, err
-				}
+					srv, err := newHTTPIngestServer(listen, mux, logger)
+					if err != nil {
+						cleanupServers()
+						return nil, err
+					}
 				group = &serverGroup{
 					mux:   mux,
 					paths: make(map[string]struct{}),
@@ -194,9 +211,10 @@ func buildHTTPServerRunners(
 				out = append(out, srv)
 			}
 
-			if _, exists := group.paths[path]; exists {
-				return nil, fmt.Errorf("duplicate http_server route: listen=%q path=%q", listen, path)
-			}
+				if _, exists := group.paths[path]; exists {
+					cleanupServers()
+					return nil, fmt.Errorf("duplicate http_server route: listen=%q path=%q", listen, path)
+				}
 			group.paths[path] = struct{}{}
 
 			group.mux.HandleFunc(path, makeHTTPIngestHandler(worker, metric, instance, logger))

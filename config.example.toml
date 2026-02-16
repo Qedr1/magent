@@ -110,9 +110,26 @@ ram_util = 5
 # [[metrics.http_client.http_client_demo]]
 # name = "http-client-demo"
 # url = "http://127.0.0.1:18091/metrics/{dc}/{host}"
+# format = "json" # default: json; supported: json|prometheus
 # scrape = "5s"
 # send = "30s"
 # timeout = "5s"
+#
+# # Vector monitoring via Prometheus exporter:
+# # 1) Vector must expose internal metrics on /metrics via internal_metrics + prometheus_exporter sink.
+# # 2) include selects exact metric names to ingest.
+# # 3) key_from_labels defines event key from labels in declared order.
+# [[metrics.http_client.vector_monitor]]
+# name = "vector-monitor"
+# url = "http://127.0.0.1:19598/metrics"
+# format = "prometheus"
+# include = ["vector_build_info", "vector_api_started_total"]
+# key_from_labels = ["host"]
+# var_mode = "full"   # full|short
+# scrape = "5s"
+# send = "30s"
+# timeout = "5s"
+# percentiles = []
 
 [[collector]]
 name = "primary"

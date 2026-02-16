@@ -16,18 +16,60 @@ type HTTPClientCollector struct {
 	metricName string
 	url        string
 	client     *http.Client
+	format     string
+	prometheus *PrometheusParser
+}
+
+// HTTPClientCollectorOptions describes optional HTTP client parsing behavior.
+// Params: format selects parser mode; prometheus fields apply when format=prometheus.
+// Returns: collector runtime options.
+type HTTPClientCollectorOptions struct {
+	Format        string
+	Include       []string
+	KeyFromLabels []string
+	VarMode       string
 }
 
 // NewHTTPClientCollector creates an HTTP client collector.
 // Params: metricName emitted into event.metric; url GET endpoint; timeout request timeout.
 // Returns: configured HTTP client collector.
-func NewHTTPClientCollector(metricName string, url string, timeout time.Duration) *HTTPClientCollector {
+func NewHTTPClientCollector(metricName string, url string, timeout time.Duration, options HTTPClientCollectorOptions) *HTTPClientCollector {
+	format := strings.ToLower(strings.TrimSpace(options.Format))
+	if format == "" {
+		format = "json"
+	}
+
+	include := make([]string, 0, len(options.Include))
+	for _, metricName := range options.Include {
+		trimmed := strings.TrimSpace(metricName)
+		if trimmed != "" {
+			include = append(include, trimmed)
+		}
+	}
+	keyFromLabels := make([]string, 0, len(options.KeyFromLabels))
+	for _, labelName := range options.KeyFromLabels {
+		trimmed := strings.TrimSpace(labelName)
+		if trimmed != "" {
+			keyFromLabels = append(keyFromLabels, trimmed)
+		}
+	}
+	varMode := strings.ToLower(strings.TrimSpace(options.VarMode))
+	if varMode == "" {
+		varMode = PrometheusVarModeFull
+	}
+
 	return &HTTPClientCollector{
 		metricName: strings.TrimSpace(metricName),
 		url:        strings.TrimSpace(url),
 		client: &http.Client{
 			Timeout: timeout,
 		},
+		format:     format,
+		prometheus: NewPrometheusParser(PrometheusParseConfig{
+			Include:       include,
+			KeyFromLabels: keyFromLabels,
+			VarMode:       varMode,
+		}),
 	}
 }
 
@@ -66,9 +108,18 @@ func (c *HTTPClientCollector) Scrape(ctx context.Context) ([]Point, error) {
 		return nil, fmt.Errorf("GET %s: unexpected status %s: %s", c.url, resp.Status, bodyText)
 	}
 
-	points, err := ParsePointsJSONFromReader(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("parse response JSON: %w", err)
+	var points []Point
+	switch c.format {
+	case "prometheus":
+		points, err = c.prometheus.ParseFromReader(resp.Body)
+		if err != nil {
+			return nil, fmt.Errorf("parse response Prometheus text: %w", err)
+		}
+	default:
+		points, err = ParsePointsJSONFromReader(resp.Body)
+		if err != nil {
+			return nil, fmt.Errorf("parse response JSON: %w", err)
+		}
 	}
 	if len(points) == 0 {
 		return nil, fmt.Errorf("empty points list")

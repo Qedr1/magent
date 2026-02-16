@@ -1,3 +1,9 @@
+# Real collector Vector config (example):
+# - receives events from magent on Vector Protocol v2
+# - flattens event.data via VRL
+# - writes to ClickHouse
+# - additionally exposes Vector internal metrics in Prometheus format on 127.0.0.1:19598
+
 [sources.agent_in]
 type = "vector"
 version = "2"
@@ -31,12 +37,6 @@ if is_object(.data) {
 
 . = events
 '''
-
-[sinks.flatten_log]
-type = "file"
-inputs = ["flatten_rows"]
-path = "./var/vector/flatten_clickhouse.log"
-encoding.codec = "json"
 
 [sinks.clickhouse]
 type = "clickhouse"

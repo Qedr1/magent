@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"magent/internal/match"
 	"magent/internal/metrics"
 )
 
@@ -138,21 +139,47 @@ func newMetricWorker(cfg WorkerConfig, sink Sink, logger *slog.Logger) (*metricW
 // Params: name is variable name; filterVar keeps only matches; dropVar removes matches.
 // Returns: true when variable should remain in event data.
 func isVariableAllowed(name string, filterVar, dropVar []string) bool {
+	return isVariableAllowedCompiled(name, compileWildcardPatterns(filterVar), compileWildcardPatterns(dropVar))
+}
+
+// compileWildcardPatterns compiles wildcard strings into reusable matchers.
+// Params: patterns wildcard strings with optional '*' characters.
+// Returns: compiled pattern slice (empty/blank entries are skipped).
+func compileWildcardPatterns(patterns []string) []match.WildcardPattern {
+	if len(patterns) == 0 {
+		return nil
+	}
+
+	compiled := make([]match.WildcardPattern, 0, len(patterns))
+	for _, pattern := range patterns {
+		parsed, ok := match.CompileWildcard(pattern)
+		if !ok {
+			continue
+		}
+		compiled = append(compiled, parsed)
+	}
+	return compiled
+}
+
+// isVariableAllowedCompiled applies precompiled filter/drop masks to variable name.
+// Params: name variable name; filterVar compiled keep masks; dropVar compiled drop masks.
+// Returns: true when variable should remain in event data.
+func isVariableAllowedCompiled(name string, filterVar, dropVar []match.WildcardPattern) bool {
 	if len(filterVar) > 0 {
-		match := false
+		allowed := false
 		for _, pattern := range filterVar {
-			if wildcardMatch(pattern, name) {
-				match = true
+			if pattern.Match(name) {
+				allowed = true
 				break
 			}
 		}
-		if !match {
+		if !allowed {
 			return false
 		}
 	}
 
 	for _, pattern := range dropVar {
-		if wildcardMatch(pattern, name) {
+		if pattern.Match(name) {
 			return false
 		}
 	}

@@ -270,6 +270,142 @@ url = "http://127.0.0.1:18080/metrics"
 	if got := workers[0].Timeout.Duration; got != 5*time.Second {
 		t.Fatalf("unexpected http-client default timeout: %v", got)
 	}
+	if got := workers[0].Format; got != "json" {
+		t.Fatalf("unexpected http-client default format: %q", got)
+	}
+	if got := workers[0].VarMode; got != "full" {
+		t.Fatalf("unexpected http-client default var_mode: %q", got)
+	}
+}
+
+// TestLoad_ParsesHTTPClientPrometheusSections verifies prometheus mode decoding.
+// Params: testing.T for assertions.
+// Returns: none.
+func TestLoad_ParsesHTTPClientPrometheusSections(t *testing.T) {
+	path := writeConfig(t, `
+[global]
+dc = "dc1"
+project = "infra"
+role = "db"
+
+[[collector]]
+addr = ["127.0.0.1:6000"]
+
+[collector.batch]
+max_events = 100
+
+[[metrics.http_client.vector]]
+url = "http://127.0.0.1:19598/metrics"
+format = "prometheus"
+include = ["vector_build_info","vector_component_received_bytes_total"]
+key_from_labels = ["host","component_id"]
+var_mode = "short"
+`)
+
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+
+	workers := cfg.Metrics.HTTPClient["vector"]
+	if len(workers) != 1 {
+		t.Fatalf("unexpected http-client workers count: %d", len(workers))
+	}
+	if got := workers[0].Format; got != "prometheus" {
+		t.Fatalf("unexpected http-client format: %q", got)
+	}
+	if got := workers[0].VarMode; got != "short" {
+		t.Fatalf("unexpected http-client var_mode: %q", got)
+	}
+	if got := workers[0].Include; len(got) != 2 || got[0] != "vector_build_info" || got[1] != "vector_component_received_bytes_total" {
+		t.Fatalf("unexpected include: %#v", got)
+	}
+	if got := workers[0].KeyFromLabels; len(got) != 2 || got[0] != "host" || got[1] != "component_id" {
+		t.Fatalf("unexpected key_from_labels: %#v", got)
+	}
+}
+
+// TestLoad_RejectsHTTPClientPrometheusWithoutInclude verifies include validation for prometheus mode.
+// Params: testing.T for assertions.
+// Returns: none.
+func TestLoad_RejectsHTTPClientPrometheusWithoutInclude(t *testing.T) {
+	path := writeConfig(t, `
+[global]
+dc = "dc1"
+project = "infra"
+role = "db"
+
+[[collector]]
+addr = ["127.0.0.1:6000"]
+
+[collector.batch]
+max_events = 100
+
+[[metrics.http_client.vector]]
+url = "http://127.0.0.1:19598/metrics"
+format = "prometheus"
+`)
+
+	_, err := config.Load(path)
+	if err == nil {
+		t.Fatalf("expected validation error for missing http_client.include in prometheus mode")
+	}
+}
+
+// TestLoad_RejectsHTTPClientInvalidFormat verifies format validation.
+// Params: testing.T for assertions.
+// Returns: none.
+func TestLoad_RejectsHTTPClientInvalidFormat(t *testing.T) {
+	path := writeConfig(t, `
+[global]
+dc = "dc1"
+project = "infra"
+role = "db"
+
+[[collector]]
+addr = ["127.0.0.1:6000"]
+
+[collector.batch]
+max_events = 100
+
+[[metrics.http_client.demo]]
+url = "http://127.0.0.1:18080/metrics"
+format = "invalid"
+`)
+
+	_, err := config.Load(path)
+	if err == nil {
+		t.Fatalf("expected validation error for invalid http_client.format")
+	}
+}
+
+// TestLoad_RejectsHTTPClientInvalidVarMode verifies var_mode validation for prometheus mode.
+// Params: testing.T for assertions.
+// Returns: none.
+func TestLoad_RejectsHTTPClientInvalidVarMode(t *testing.T) {
+	path := writeConfig(t, `
+[global]
+dc = "dc1"
+project = "infra"
+role = "db"
+
+[[collector]]
+addr = ["127.0.0.1:6000"]
+
+[collector.batch]
+max_events = 100
+
+[[metrics.http_client.vector]]
+url = "http://127.0.0.1:19598/metrics"
+format = "prometheus"
+include = ["vector_build_info"]
+var_mode = "bad"
+`)
+
+	_, err := config.Load(path)
+	if err == nil {
+		t.Fatalf("expected validation error for invalid http_client.var_mode")
+	}
 }
 
 // TestLoad_ParsesHTTPServerSections verifies [[metrics.http_server.<name>]] decoding and defaults.

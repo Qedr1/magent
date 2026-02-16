@@ -2,27 +2,51 @@ package match
 
 import "strings"
 
-// WildcardMatch evaluates '*' wildcard pattern against value.
-// Params: pattern may contain '*' wildcards; value is compared text.
-// Returns: true on pattern match.
-func WildcardMatch(pattern, value string) bool {
+// WildcardPattern is a compiled '*' wildcard matcher.
+// Params: internal split parts and anchor flags.
+// Returns: reusable matcher for many Match calls.
+type WildcardPattern struct {
+	parts         []string
+	anchoredStart bool
+	anchoredEnd   bool
+	matchAll      bool
+}
+
+// CompileWildcard compiles pattern into reusable wildcard matcher.
+// Params: pattern may contain '*' wildcards.
+// Returns: compiled matcher and false when pattern is empty.
+func CompileWildcard(pattern string) (WildcardPattern, bool) {
 	p := strings.TrimSpace(pattern)
 	if p == "" {
-		return false
+		return WildcardPattern{}, false
 	}
 	if p == "*" {
-		return true
+		return WildcardPattern{matchAll: true}, true
 	}
 
-	parts := strings.Split(p, "*")
-	anchoredStart := !strings.HasPrefix(p, "*")
-	anchoredEnd := !strings.HasSuffix(p, "*")
+	return WildcardPattern{
+		parts:         strings.Split(p, "*"),
+		anchoredStart: !strings.HasPrefix(p, "*"),
+		anchoredEnd:   !strings.HasSuffix(p, "*"),
+	}, true
+}
+
+// Match evaluates compiled wildcard pattern against value.
+// Params: value is compared text.
+// Returns: true on pattern match.
+func (p WildcardPattern) Match(value string) bool {
+	if p.matchAll {
+		return true
+	}
+	if len(p.parts) == 0 {
+		return false
+	}
 
 	cursor := 0
 	partIndex := 0
 
-	if anchoredStart {
-		startPart := parts[0]
+	if p.anchoredStart {
+		startPart := p.parts[0]
 		if !strings.HasPrefix(value, startPart) {
 			return false
 		}
@@ -30,14 +54,14 @@ func WildcardMatch(pattern, value string) bool {
 		partIndex = 1
 	}
 
-	lastIndex := len(parts) - 1
-	loopLimit := len(parts)
-	if anchoredEnd {
+	lastIndex := len(p.parts) - 1
+	loopLimit := len(p.parts)
+	if p.anchoredEnd {
 		loopLimit = lastIndex
 	}
 
 	for ; partIndex < loopLimit; partIndex++ {
-		segment := parts[partIndex]
+		segment := p.parts[partIndex]
 		if segment == "" {
 			continue
 		}
@@ -48,8 +72,8 @@ func WildcardMatch(pattern, value string) bool {
 		cursor += offset + len(segment)
 	}
 
-	if anchoredEnd {
-		endPart := parts[lastIndex]
+	if p.anchoredEnd {
+		endPart := p.parts[lastIndex]
 		if endPart == "" {
 			return true
 		}
@@ -57,4 +81,15 @@ func WildcardMatch(pattern, value string) bool {
 	}
 
 	return true
+}
+
+// WildcardMatch evaluates '*' wildcard pattern against value.
+// Params: pattern may contain '*' wildcards; value is compared text.
+// Returns: true on pattern match.
+func WildcardMatch(pattern, value string) bool {
+	compiled, ok := CompileWildcard(pattern)
+	if !ok {
+		return false
+	}
+	return compiled.Match(value)
 }

@@ -207,15 +207,19 @@ type HTTPServerWorkerConfig struct {
 // Params: scrape/send schedule/filter options and HTTP GET settings.
 // Returns: http-client worker runtime config.
 type HTTPClientWorkerConfig struct {
-	Name        string   `toml:"name"`
-	Scrape      Duration `toml:"scrape"`
-	Send        Duration `toml:"send"`
-	Percentiles []int    `toml:"percentiles"`
-	DropVar     []string `toml:"drop_var"`
-	FilterVar   []string `toml:"filter_var"`
-	DropEvent   []string `toml:"drop_event"`
-	URL         string   `toml:"url"`
-	Timeout     Duration `toml:"timeout"`
+	Name          string   `toml:"name"`
+	Scrape        Duration `toml:"scrape"`
+	Send          Duration `toml:"send"`
+	Percentiles   []int    `toml:"percentiles"`
+	DropVar       []string `toml:"drop_var"`
+	FilterVar     []string `toml:"filter_var"`
+	DropEvent     []string `toml:"drop_event"`
+	URL           string   `toml:"url"`
+	Timeout       Duration `toml:"timeout"`
+	Format        string   `toml:"format"`
+	Include       []string `toml:"include"`
+	KeyFromLabels []string `toml:"key_from_labels"`
+	VarMode       string   `toml:"var_mode"`
 }
 
 // NetflowWorkerConfig defines one built-in netflow worker using raw packet capture.
@@ -373,6 +377,12 @@ func (c *Config) applyDefaults() error {
 		for idx := range workers {
 			if workers[idx].Timeout.Duration == 0 {
 				workers[idx].Timeout.Duration = defaultHTTPTimeout
+			}
+			workers[idx].Format = lowerOrDefault(workers[idx].Format, "json")
+			if workers[idx].VarMode == "" {
+				workers[idx].VarMode = "full"
+			} else {
+				workers[idx].VarMode = strings.ToLower(strings.TrimSpace(workers[idx].VarMode))
 			}
 		}
 		c.Metrics.HTTPClient[metricName] = workers
@@ -770,6 +780,30 @@ func validateHTTPClientWorkers(path string, workers map[string][]HTTPClientWorke
 			}
 			if strings.TrimSpace(worker.URL) == "" {
 				return fmt.Errorf("%s.url is required", workerPath)
+			}
+			switch strings.ToLower(strings.TrimSpace(worker.Format)) {
+			case "json":
+			case "prometheus":
+				if len(worker.Include) == 0 {
+					return fmt.Errorf("%s.include must contain at least one metric for format=prometheus", workerPath)
+				}
+				for includeIdx, includeName := range worker.Include {
+					if strings.TrimSpace(includeName) == "" {
+						return fmt.Errorf("%s.include[%d] cannot be empty", workerPath, includeIdx)
+					}
+				}
+				for labelIdx, labelName := range worker.KeyFromLabels {
+					if strings.TrimSpace(labelName) == "" {
+						return fmt.Errorf("%s.key_from_labels[%d] cannot be empty", workerPath, labelIdx)
+					}
+				}
+				switch strings.ToLower(strings.TrimSpace(worker.VarMode)) {
+				case "full", "short":
+				default:
+					return fmt.Errorf("%s.var_mode must be one of: full, short", workerPath)
+				}
+			default:
+				return fmt.Errorf("%s.format must be one of: json, prometheus", workerPath)
 			}
 
 			for _, p := range worker.Percentiles {

@@ -56,6 +56,14 @@ func NewCollectorSink(
 		workers: make([]*collectorWorker, 0, len(collectors)),
 		logger:  logger,
 	}
+	cleanupQueues := func() {
+		for _, worker := range out.workers {
+			if worker.queue == nil {
+				continue
+			}
+			_ = worker.queue.Close()
+		}
+	}
 
 	for idx, cfg := range collectors {
 		name := strings.TrimSpace(cfg.Name)
@@ -67,16 +75,17 @@ func NewCollectorSink(
 
 		var queue *DiskQueue
 		var err error
-		if cfg.Queue.Enabled {
-			queue, err = OpenDiskQueue(
+			if cfg.Queue.Enabled {
+				queue, err = OpenDiskQueue(
 				cfg.Queue.Dir,
 				cfg.Queue.MaxEvents,
 				cfg.Queue.MaxAge.Duration,
 			)
-			if err != nil {
-				return nil, fmt.Errorf("init queue for %s: %w", name, err)
+				if err != nil {
+					cleanupQueues()
+					return nil, fmt.Errorf("init queue for %s: %w", name, err)
+				}
 			}
-		}
 
 		worker := &collectorWorker{
 			name:   name,
@@ -139,8 +148,10 @@ func (w *collectorWorker) run(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			w.flushBatch(ctx)
-			_ = w.drainQueue(ctx)
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), w.shutdownDrainTimeout())
+			w.flushBatch(shutdownCtx)
+			_ = w.drainQueue(shutdownCtx)
+			cancel()
 			return
 		case event := <-w.input:
 			w.appendBatch(event)
@@ -153,6 +164,35 @@ func (w *collectorWorker) run(ctx context.Context) {
 			_ = w.drainQueue(ctx)
 		}
 	}
+}
+
+// shutdownDrainTimeout calculates bounded timeout used for final flush/drain after root context cancellation.
+// Params: none.
+// Returns: timeout duration for graceful collector shutdown.
+func (w *collectorWorker) shutdownDrainTimeout() time.Duration {
+	base := w.cfg.Timeout.Duration
+	if base <= 0 {
+		base = 5 * time.Second
+	}
+
+	addresses := 0
+	for _, address := range w.cfg.Addr {
+		if strings.TrimSpace(address) != "" {
+			addresses++
+		}
+	}
+	if addresses == 0 {
+		addresses = 1
+	}
+
+	timeout := time.Duration(addresses)*base + 2*time.Second
+	if timeout < 3*time.Second {
+		timeout = 3 * time.Second
+	}
+	if timeout > time.Minute {
+		timeout = time.Minute
+	}
+	return timeout
 }
 
 // appendBatch appends one event into current in-memory batch.

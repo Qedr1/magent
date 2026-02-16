@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"magent/internal/match"
 	"magent/internal/metrics"
 )
 
@@ -26,16 +27,22 @@ type windowConfig struct {
 type window struct {
 	cfg windowConfig
 
-	buffer   map[string]map[string]*series
-	known    map[string]map[string]metrics.ValueKind
+	buffer map[string]map[string]*series
+	known  map[string]map[string]metrics.ValueKind
+
+	filterVarPatterns []match.WildcardPattern
+	dropVarPatterns   []match.WildcardPattern
+
 	windowDT uint64
 }
 
 func newWindow(cfg windowConfig) *window {
 	return &window{
-		cfg:    cfg,
-		buffer: make(map[string]map[string]*series),
-		known:  make(map[string]map[string]metrics.ValueKind),
+		cfg:               cfg,
+		buffer:            make(map[string]map[string]*series),
+		known:             make(map[string]map[string]metrics.ValueKind),
+		filterVarPatterns: compileWildcardPatterns(cfg.FilterVar),
+		dropVarPatterns:   compileWildcardPatterns(cfg.DropVar),
 	}
 }
 
@@ -60,9 +67,9 @@ func (w *window) appendPoints(points []metrics.Point) bool {
 			if valueName == "" {
 				continue
 			}
-			if !isVariableAllowed(valueName, w.cfg.FilterVar, w.cfg.DropVar) {
-				continue
-			}
+				if !isVariableAllowedCompiled(valueName, w.filterVarPatterns, w.dropVarPatterns) {
+					continue
+				}
 
 			seriesBuffer, ok := w.buffer[key][valueName]
 			if !ok {

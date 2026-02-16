@@ -19,7 +19,7 @@ If a detail is not stated here: treat it as unknown and ask the user.
 - Vector configs: `deploy/vector/*` (Vector Protocol v2 receiver + VRL flatten)
 - ClickHouse DDL/scripts: `deploy/clickhouse/*`
 - Tests (bash e2e): `docs/tests/*`
-- Examples: `docs/example/*` (script + built-in netflow configs)
+- Examples: `docs/example/*` (script + built-in netflow + vector monitoring configs)
 - Roadmap: `docs/state/detailed_plan.md`; changelog: `docs/state/changelog.md`
 
 ## Architecture/Flow
@@ -114,10 +114,13 @@ HTTP server metrics (push):
 HTTP client metrics (poll):
 - `[[metrics.http_client.<metric_name>]]`:
   - required: `url`, `timeout>0` (default 5s)
+  - optional: `format=json|prometheus` (default `json`)
+  - optional for `format=prometheus`: `include=[metric_names...]` (required in this mode), `key_from_labels=[label,...]`, `var_mode=full|short` (default `full`)
   - schedule: `scrape` + `send`
   - HTTP: `GET` only; non-2xx is scrape error
   - `url` supports placeholders (path-escaped): `{dc},{host},{project},{role},{metric},{instance}`
-  - response JSON uses the External Metric JSON Contract below
+  - `format=json`: response uses the External Metric JSON Contract below
+  - `format=prometheus`: parse text exposition; only `counter` and `gauge` are ingested; each sample becomes one point (`key` from labels or `"total"`, `var` from metric name)
 
 Netflow metric (pull):
 - `[[metrics.netflow]]`:
@@ -190,6 +193,9 @@ Keys are always strings; values are normalized as above.
   - `. = events`
 - `key` is preserved via `base_event`.
 - ClickHouse sink (e2e configs): `table = "{{ .metric }}"`, `skip_unknown_fields=true`, `date_time_best_effort=true`.
+- Real runtime collector config (`deploy/vector/clickhouse-e2e.toml`) also exposes Vector internal metrics:
+  - source: `internal_metrics`
+  - sink: `prometheus_exporter` on `127.0.0.1:19598` (`default_namespace="vector"`)
 
 ## ClickHouse Schema/Retention
 - Table-per-metric; schema is identical across all metric tables.
@@ -212,6 +218,7 @@ Keys are always strings; values are normalized as above.
   - `bash docs/tests/run_collector_delivery_modes.sh [failover_db] [multi_db_a] [multi_db_b]`
   - `bash docs/tests/run_http_server_e2e.sh [db]`
   - `bash docs/tests/run_http_client_e2e.sh [db]`
+  - `bash docs/tests/run_http_client_vector_prom_e2e.sh [db]`
   - `bash docs/tests/run_netflow_pairs_e2e.sh [db]` (http-ingest raw->MV pairs path)
   - `bash docs/tests/run_netflow_builtin_e2e.sh [db]` (built-in AF_PACKET netflow path)
   - `bash docs/tests/run_p19_max_load.sh [db] [duration_s]`
@@ -233,7 +240,11 @@ Known test-script quirks (do not change semantics):
   - pprof deltas:
     - CPU samples: `1.85s -> 1.63s` (`-11.89%`)
     - heap `alloc_space` total: `2292.97MB -> 1734.21MB` (`-24.37%`)
+- P#40 optimization/reliability wave applied:
+  - reliability: graceful final collector flush on shutdown now uses bounded background timeout context; constructor cleanup closes already-opened queue/listener resources on build errors.
+  - runtime perf: wildcard/drop filters are precompiled; `http_client` Prometheus parser is precompiled per collector; netflow uses sharded counters and top-N min-heap selection.
+  - validation: `go test ./...`, `go vet ./...`, short soak+pprof (`docs/tests/run_soak_pprof.sh metrics 120 20`) and high-load pprof run (`/tmp/magent-p40-pprof/*`) passed; dominant CPU remains syscall/gopsutil-heavy, expected for current collector model.
 
 ## Project plan (status snapshot)
 - Detailed roadmap: `docs/state/detailed_plan.md`.
-- Current: P#1..P#20 DONE; P#21 OPEN; P#22..P#28 DONE; P#29 OPEN; P#31 DONE.
+- Current: P#1..P#20 DONE; P#21 OPEN; P#22..P#28 DONE; P#29 OPEN; P#31 DONE; P#33..P#35 DONE; P#37..P#40 DONE.

@@ -25,6 +25,12 @@ type DropCondition struct {
 	Field string
 	Op    conditionOperator
 	Value string
+
+	valueNumber float64
+	valueIsNum  bool
+
+	wildcard    match.WildcardPattern
+	hasWildcard bool
 }
 
 // EventEvalContext is the input for drop_event condition evaluation.
@@ -56,12 +62,28 @@ func parseDropCondition(expression string) (DropCondition, error) {
 		return DropCondition{}, fmt.Errorf("value is empty in expression %q", raw)
 	}
 
-	return DropCondition{
+	condition := DropCondition{
 		Raw:   raw,
 		Field: field,
 		Op:    op,
 		Value: value,
-	}, nil
+		valueIsNum: false,
+	}
+
+	if parsed, ok := parseFloat(value); ok {
+		condition.valueNumber = parsed
+		condition.valueIsNum = true
+	}
+
+	if strings.Contains(value, "*") {
+		compiled, ok := match.CompileWildcard(value)
+		if ok {
+			condition.wildcard = compiled
+			condition.hasWildcard = true
+		}
+	}
+
+	return condition, nil
 }
 
 // shouldDropEvent evaluates OR logic over all configured drop conditions.
@@ -84,11 +106,11 @@ func evaluateDropCondition(condition DropCondition, ctx EventEvalContext) bool {
 
 	switch field {
 	case "metric":
-		return compareString(condition.Op, ctx.Metric, condition.Value)
+		return compareString(condition, ctx.Metric)
 	case "key":
-		return compareString(condition.Op, ctx.Key, condition.Value)
+		return compareString(condition, ctx.Key)
 	case "var":
-		return compareVarNames(condition.Op, condition.Value, ctx.Data)
+		return compareVarNames(condition, ctx.Data)
 	default:
 		varData, ok := ctx.Data[field]
 		if !ok {
@@ -98,23 +120,23 @@ func evaluateDropCondition(condition DropCondition, ctx EventEvalContext) bool {
 		if !ok {
 			return false
 		}
-		return compareAny(condition.Op, lastValue, condition.Value)
+		return compareAny(condition, lastValue)
 	}
 }
 
 // compareVarNames evaluates var-based conditions against event variable names.
-// Params: op operator; pattern expression value; data event data map.
+// Params: condition compiled drop condition; data event data map.
 // Returns: true when condition matches.
-func compareVarNames(op conditionOperator, pattern string, data map[string]map[string]any) bool {
+func compareVarNames(condition DropCondition, data map[string]map[string]any) bool {
 	hasMatch := false
 	for varName := range data {
-		if wildcardMatch(pattern, varName) {
+		if matchConditionString(condition, varName) {
 			hasMatch = true
 			break
 		}
 	}
 
-	switch op {
+	switch condition.Op {
 	case operatorEQ:
 		return hasMatch
 	case operatorNE:
@@ -125,50 +147,55 @@ func compareVarNames(op conditionOperator, pattern string, data map[string]map[s
 }
 
 // compareAny compares string/numeric values according to operator.
-// Params: op operator; actual event value; expected expression value.
+// Params: condition compiled drop condition; actual event value.
 // Returns: true when comparison succeeds.
-func compareAny(op conditionOperator, actual any, expected string) bool {
+func compareAny(condition DropCondition, actual any) bool {
 	actualNumber, actualIsNumber := toFloat64(actual)
-	expectedNumber, expectedIsNumber := parseFloat(expected)
 
-	switch op {
+	switch condition.Op {
 	case operatorGT:
-		return actualIsNumber && expectedIsNumber && actualNumber > expectedNumber
+		return actualIsNumber && condition.valueIsNum && actualNumber > condition.valueNumber
 	case operatorLT:
-		return actualIsNumber && expectedIsNumber && actualNumber < expectedNumber
+		return actualIsNumber && condition.valueIsNum && actualNumber < condition.valueNumber
 	case operatorEQ:
-		if actualIsNumber && expectedIsNumber {
-			return actualNumber == expectedNumber
+		if actualIsNumber && condition.valueIsNum {
+			return actualNumber == condition.valueNumber
 		}
-		return compareString(op, stringify(actual), expected)
+		return compareString(condition, stringify(actual))
 	case operatorNE:
-		if actualIsNumber && expectedIsNumber {
-			return actualNumber != expectedNumber
+		if actualIsNumber && condition.valueIsNum {
+			return actualNumber != condition.valueNumber
 		}
-		return compareString(op, stringify(actual), expected)
+		return compareString(condition, stringify(actual))
 	default:
 		return false
 	}
 }
 
 // compareString compares strings with optional wildcard support.
-// Params: op operator; actual string; expected expression value.
+// Params: condition compiled drop condition; actual event string value.
 // Returns: true when comparison succeeds.
-func compareString(op conditionOperator, actual, expected string) bool {
-	switch op {
+func compareString(condition DropCondition, actual string) bool {
+	matched := matchConditionString(condition, actual)
+
+	switch condition.Op {
 	case operatorEQ:
-		if strings.Contains(expected, "*") {
-			return wildcardMatch(expected, actual)
-		}
-		return actual == expected
+		return matched
 	case operatorNE:
-		if strings.Contains(expected, "*") {
-			return !wildcardMatch(expected, actual)
-		}
-		return actual != expected
+		return !matched
 	default:
 		return false
 	}
+}
+
+// matchConditionString checks one string value against condition literal/wildcard.
+// Params: condition compiled drop condition; actual value from event.
+// Returns: true when value matches condition.
+func matchConditionString(condition DropCondition, actual string) bool {
+	if condition.hasWildcard {
+		return condition.wildcard.Match(actual)
+	}
+	return actual == condition.Value
 }
 
 // splitCondition splits raw expression into field/operator/value.
