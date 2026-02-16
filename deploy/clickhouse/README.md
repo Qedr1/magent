@@ -22,3 +22,16 @@ Script metrics use the same schema; the table name must match `event.metric` (e.
   - `bash ./deploy/clickhouse/create_builtin_tables.sh metrics "db"`
 - Create multiple:
   - `bash ./deploy/clickhouse/create_builtin_tables.sh metrics "db,chaos"`
+
+## Netflow analytics table via materialized view
+- Raw intake stays in universal metric table (example: `netflow`) with standard columns `key,var,agg,value`.
+- Parsed analytics goes to `netflow_pairs` where composed `key` is split into columns:
+  - `iface, proto, src_ip, src_port, dst_ip, dst_port`
+  - counters: `bytes, packets, flows`
+  - `src_ip` and `dst_ip` are stored as `IPv6` (IPv4 values are normalized to mapped IPv6 form)
+
+Create (raw + pairs + MV):
+- `bash ./deploy/clickhouse/create_netflow_pairs.sh metrics netflow netflow_pairs mv_netflow_pairs`
+
+Expected key format in raw table:
+- `iface|proto|src_ip|src_port|dst_ip|dst_port`

@@ -1,0 +1,43 @@
+[global]
+dc = "${DC}"
+project = "${PROJECT}"
+role = "${ROLE}"
+host = ""
+
+[log.console]
+enabled = true
+level = "info"
+format = "line"
+
+[log.file]
+enabled = false
+level = "info"
+format = "json"
+path = "./var/log/magent.log"
+
+[metrics]
+send = "60s"
+
+[[metrics.http_server.netflow]]
+name = "netflow-http"
+listen = "127.0.0.1:18092"
+path = "/netflow"
+send = "60s"
+percentiles = []
+max_pending = 4096
+
+[[collector]]
+name = "vector-local"
+addr = ["127.0.0.1:6000"]
+timeout = "5s"
+retry_interval = "3s"
+
+[collector.batch]
+max_events = 1000
+max_age = "5s"
+
+[collector.queue]
+enabled = true
+dir = "./var/queue/netflow"
+max_events = 100000
+max_age = "24h"

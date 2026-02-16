@@ -26,3 +26,5 @@ Status rules: `OPEN` by default; set to `DONE` only after user OK + tests pass; 
 - P#22 [DONE]: Add HTTP metrics sources: `http_server` (push) and `http_client` (GET) with shared aggregation/sending rules.
 - P#23 [DONE]: Add e2e scripts for `http_server` and `http_client` ensuring ClickHouse rows (including percentiles) match sources.
 - P#24 [DONE]: Make metric percentiles optional (`nil/[]` => last-only aggregation, no `pXX`) with tests.
+- P#25 [DONE]: Add netflow intake path via `http_server` with ClickHouse materialized view (`netflow` raw -> `netflow_pairs`) and e2e correctness check.
+- P#26 [DONE]: Move netflow examples under `docs/example/netflow`, switch `netflow_pairs.src_ip/dst_ip` to `IPv6`, and revalidate e2e in `metrics`.
