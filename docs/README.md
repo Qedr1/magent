@@ -318,6 +318,10 @@ LowCardinality снижает накладные расходы на дубли�
 ### ClickHouse: принцип хранения
 - одна таблица на каждое имя метрики
 - для script-метрик имя таблицы равно `<name>`
+- для netflow аналитики используется связка:
+  - raw-таблица `netflow` (универсальная схема `dt,dts,dtv,tags,key,var,agg,value`, в ней хранятся входные агрегаты потока)
+  - materialized view `mv_netflow_pairs` (парсит составной `key` из raw-события и формирует аналитические поля пары)
+  - итоговая таблица `netflow_pairs` (пары `iface/proto/src_ip/src_port/dst_ip/dst_port` + `bytes/packets/flows`)
 
 ### Структура хранения ClickHouse
 Имя таблицы задается по имени метрики
@@ -339,6 +343,29 @@ ORDER BY: (dt, host, key)
 TTL: dt + INTERVAL 4 MONTH
 ```
 
+#### netflow_pairs (итоговая аналитическая таблица)
+```
+dt: DateTime64(3) CODEC(DoubleDelta)               // время окна агрегации в агенте
+dts: DateTime CODEC(DoubleDelta)                   // время отправки в коллектор
+dtv: DateTime CODEC(DoubleDelta)                   // время вставки в итоговую таблицу
+dc: LowCardinality(String)                         // глобальный тег
+host: LowCardinality(String)                       // глобальный тег
+project: LowCardinality(String)                    // глобальный тег
+role: LowCardinality(String)                       // глобальный тег
+host_ip: IPv6                                      // ip отправителя события
+iface: LowCardinality(String)                      // интерфейс
+proto: LowCardinality(String)                      // протокол (tcp/udp/...)
+src_ip: IPv6                                       // source IP
+src_port: UInt16                                   // source port
+dst_ip: IPv6                                       // destination IP
+dst_port: UInt16                                   // destination port
+bytes: UInt64                                      // байты за окно
+packets: UInt64                                    // пакеты за окно
+flows: UInt64                                      // количество flow-записей за окно
+ORDER BY: (dt, host, iface, proto, src_ip, src_port, dst_ip, dst_port)
+PARTITION BY: toYYYYMMDD(dt)
+TTL: dt + INTERVAL 4 MONTH
+```
+
 ## TODO
-- сбор статистики хоста по трафику в netflow v9
 - snmp trap
