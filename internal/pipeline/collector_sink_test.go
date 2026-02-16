@@ -28,10 +28,21 @@ func (s *fakeSender) Encode(_ []Event) ([]byte, error) {
 	return s.encodedPayload, nil
 }
 
+// SendBatch records call order and returns configured error by address.
+// Params: ctx/timeout ignored; address selects simulated result.
+// Returns: configured error or nil.
+func (s *fakeSender) SendBatch(ctx context.Context, address string, _ []Event, timeout time.Duration) error {
+	return s.recordSend(ctx, address, timeout)
+}
+
 // Send records call order and returns configured error by address.
 // Params: ctx/timeout ignored; address selects simulated result.
 // Returns: configured error or nil.
 func (s *fakeSender) Send(ctx context.Context, address string, _ []byte, timeout time.Duration) error {
+	return s.recordSend(ctx, address, timeout)
+}
+
+func (s *fakeSender) recordSend(ctx context.Context, address string, timeout time.Duration) error {
 	s.sendCalls = append(s.sendCalls, address)
 	s.sendTimeouts = append(s.sendTimeouts, timeout)
 	_, hasDeadline := ctx.Deadline()
@@ -285,10 +296,21 @@ func (s *retrySender) Encode(_ []Event) ([]byte, error) {
 	return s.encodedPayload, nil
 }
 
+// SendBatch returns scripted results in call order.
+// Params: ctx/address/events/timeout are ignored in this fake.
+// Returns: scripted error for current call index.
+func (s *retrySender) SendBatch(_ context.Context, _ string, _ []Event, _ time.Duration) error {
+	return s.nextResult()
+}
+
 // Send returns scripted results in call order.
 // Params: ctx/address/payload/timeout are ignored in this fake.
 // Returns: scripted error for current call index.
 func (s *retrySender) Send(_ context.Context, _ string, _ []byte, _ time.Duration) error {
+	return s.nextResult()
+}
+
+func (s *retrySender) nextResult() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 

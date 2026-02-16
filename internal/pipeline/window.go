@@ -85,20 +85,6 @@ func (w *window) observeDT(dtMillis uint64) {
 	}
 }
 
-func (w *window) resolveSeries(key string, vars map[string]metrics.ValueKind) map[string]series {
-	out := make(map[string]series, len(vars))
-	for varName, kind := range vars {
-		s := series{kind: kind}
-		if keySamples, ok := w.buffer[key]; ok {
-			if buffered, ok := keySamples[varName]; ok {
-				s = *buffered
-			}
-		}
-		out[varName] = s
-	}
-	return out
-}
-
 func (w *window) emitWindow(ctx context.Context, dtFallback time.Duration) {
 	if len(w.buffer) == 0 && len(w.known) == 0 {
 		return
@@ -119,14 +105,29 @@ func (w *window) emitWindow(ctx context.Context, dtFallback time.Duration) {
 	}
 
 	for key, vars := range w.known {
-		seriesMap := w.resolveSeries(key, vars)
-		if w.cfg.EmitFilter != nil && !w.cfg.EmitFilter(key, seriesMap) {
-			continue
+		keySamples := w.buffer[key]
+
+		if w.cfg.EmitFilter != nil {
+			seriesMap := make(map[string]series, len(vars))
+			for varName, kind := range vars {
+				currentSeries := series{kind: kind}
+				if buffered, ok := keySamples[varName]; ok {
+					currentSeries = *buffered
+				}
+				seriesMap[varName] = currentSeries
+			}
+			if !w.cfg.EmitFilter(key, seriesMap) {
+				continue
+			}
 		}
 
-		data := make(map[string]map[string]any, len(seriesMap))
-		for varName, sampleSeries := range seriesMap {
-			data[varName] = aggregateSeries(sampleSeries, w.cfg.Percentiles)
+		data := make(map[string]map[string]any, len(vars))
+		for varName, kind := range vars {
+			currentSeries := series{kind: kind}
+			if buffered, ok := keySamples[varName]; ok {
+				currentSeries = *buffered
+			}
+			data[varName] = aggregateSeries(currentSeries, w.cfg.Percentiles)
 		}
 
 		if shouldDropEvent(

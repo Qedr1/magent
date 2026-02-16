@@ -14,7 +14,7 @@ If a detail is not stated here: treat it as unknown and ask the user.
 - Runtime: `internal/app/*` (config+logger+pprof+pipeline)
 - Config: `internal/config/config.go`; example: `config.example.toml`
 - Pipeline: `internal/pipeline/*` (workers, window aggregation, filters, collector sink, queue, sender, http ingest)
-- Metrics: `internal/metrics/*` (built-ins + script + http_client + shared points JSON parser)
+- Metrics: `internal/metrics/*` (built-ins + script + http_client + shared typed points JSON parser)
 - Vector configs: `deploy/vector/*` (Vector Protocol v2 receiver + VRL flatten)
 - ClickHouse DDL/scripts: `deploy/clickhouse/*`
 - Tests (bash e2e): `docs/tests/*`
@@ -30,6 +30,9 @@ If a detail is not stated here: treat it as unknown and ask the user.
 4. Transport: Vector Protocol v2 over gRPC -> Vector `source=vector(version=2)` -> VRL `remap` flattens -> ClickHouse sink inserts into per-metric tables.
 
 MultiSink dispatch is sequential (no goroutine-per-event overhead). CollectorSink Consume blocks on backpressure (per-collector channel buffer: 4096 events).
+Collector delivery path:
+- Live in-memory batch uses `SendBatch` fast-path (direct protobuf request build + gRPC push; no intermediate payload decode).
+- Disk queue/retry path keeps encoded payload (`Encode` + `Send`) for durability format compatibility.
 
 ## Time/Window Semantics
 - `dt` (event time): Unix epoch milliseconds; first sample time in the send window (scrapeAt for pull, ingestAt for push); fallback `sendAt - interval`. Enforced: `dt < dts`.
@@ -165,6 +168,7 @@ Keys are always strings; values are normalized as above.
   - number (finite)
   - object: `{value|last: number, kind?: string}` where kind in `number|num|uint64|percent|pct|%|uint8_percent`
 - Kind inference when kind absent: `util` or `*_util` => percent; else number.
+- Parser implementation uses typed `json.RawMessage` decode path (no `map[string]any` contract walk).
 
 ## Vector (Collector) Side: VRL Flattening (no custom parsers)
 - Vector Protocol v2 source listens on `0.0.0.0:6000` in provided configs.
@@ -190,7 +194,7 @@ Keys are always strings; values are normalized as above.
 ## Ops (Build/Run/Test/E2E)
 - Build: `make build` -> `bin/magent` (prod flags); optional `make build-upx`.
 - Run: `./bin/magent -config <path>` (default config path: `config.toml`).
-- Unit checks (2026-02-15): `go test ./...`, `go test -race ./...`, `go vet ./...` PASS.
+- Unit checks (2026-02-16): `go test ./...`, `go vet ./...` PASS.
 - E2E scripts:
   - `bash docs/tests/run_agent_vector_clickhouse.sh [db] [table]`
   - `bash docs/tests/run_all_metrics_queue_batch.sh [db]`
@@ -204,6 +208,19 @@ Keys are always strings; values are normalized as above.
 Known test-script quirks (do not change semantics):
 - `docs/tests/chaos_failover/run.sh` progress log checks queue bytes in `${QUEUE_DIR}/events.bin` but actual queue file is `${QUEUE_DIR}/queue.bin`; PASS criteria is distinct delivered keys, not queue_bytes.
 
+## Performance State (P#28)
+- Applied optimizations:
+  - sender fast-path for live batches (`SendBatch`) with queue-path compatibility kept.
+  - typed external JSON parsing (`json.RawMessage`) for script/http metrics.
+  - window emit allocation cut: avoid building `seriesMap` unless `EmitFilter` is set.
+  - script collector env cached at collector construction.
+- 10-minute extreme all-metrics reprofiling:
+  - baseline DB: `metrics_profile_10m`; optimized DB: `metrics_profile_10m_p28`
+  - data checks: all metric tables populated; `countIf(dt>=dts)=0`; `netflow` has only `agg=last`.
+  - pprof deltas:
+    - CPU samples: `1.85s -> 1.63s` (`-11.89%`)
+    - heap `alloc_space` total: `2292.97MB -> 1734.21MB` (`-24.37%`)
+
 ## Project plan (status snapshot)
 - Detailed roadmap: `docs/state/detailed_plan.md`.
-- Current: P#1..P#20 DONE; P#21 OPEN; P#22 DONE; P#23 DONE; P#24 DONE.
+- Current: P#1..P#20 DONE; P#21 OPEN; P#22..P#28 DONE.

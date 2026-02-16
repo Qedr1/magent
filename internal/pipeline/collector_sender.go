@@ -22,6 +22,7 @@ import (
 // Returns: encoded payload and send status.
 type CollectorSender interface {
 	Encode(events []Event) ([]byte, error)
+	SendBatch(ctx context.Context, address string, events []Event, timeout time.Duration) error
 	Send(ctx context.Context, address string, payload []byte, timeout time.Duration) error
 }
 
@@ -39,16 +40,9 @@ type VectorGRPCSender struct {
 // Params: events batch.
 // Returns: protobuf payload or encode error.
 func (s *VectorGRPCSender) Encode(events []Event) ([]byte, error) {
-	request := &vectorpb.PushEventsRequest{
-		Events: make([]*eventpb.EventWrapper, 0, len(events)),
-	}
-
-	for idx, event := range events {
-		wrapped, err := encodeEventWrapper(event)
-		if err != nil {
-			return nil, fmt.Errorf("encode event[%d]: %w", idx, err)
-		}
-		request.Events = append(request.Events, wrapped)
+	request, err := buildPushEventsRequest(events)
+	if err != nil {
+		return nil, err
 	}
 
 	payload, err := proto.Marshal(request)
@@ -58,23 +52,50 @@ func (s *VectorGRPCSender) Encode(events []Event) ([]byte, error) {
 	return payload, nil
 }
 
+// SendBatch encodes events directly into request and pushes them to one Vector address.
+// Params: ctx lifecycle context; address destination host:port; events batch; timeout dial/call timeout.
+// Returns: send error on encode/connect/rpc failure.
+func (s *VectorGRPCSender) SendBatch(
+	ctx context.Context,
+	address string,
+	events []Event,
+	timeout time.Duration,
+) error {
+	request, err := buildPushEventsRequest(events)
+	if err != nil {
+		return err
+	}
+	return s.sendPreparedRequest(ctx, address, request, timeout)
+}
+
 // Send decodes and pushes payload to one Vector address with timeout.
 // Params: ctx lifecycle context; address destination host:port; payload encoded push request; timeout dial/call timeout.
 // Returns: send error on decode/connect/rpc failure.
 func (s *VectorGRPCSender) Send(ctx context.Context, address string, payload []byte, timeout time.Duration) error {
+	var request vectorpb.PushEventsRequest
+	if err := proto.Unmarshal(payload, &request); err != nil {
+		return fmt.Errorf("unmarshal push request: %w", err)
+	}
+	return s.sendPreparedRequest(ctx, address, &request, timeout)
+}
+
+// sendPreparedRequest sends a prepared push request to one Vector address.
+// Params: ctx lifecycle context; address destination host:port; request prepared payload; timeout dial/call timeout.
+// Returns: send error on connect/rpc failure.
+func (s *VectorGRPCSender) sendPreparedRequest(
+	ctx context.Context,
+	address string,
+	request *vectorpb.PushEventsRequest,
+	timeout time.Duration,
+) error {
 	addr := strings.TrimSpace(address)
 	if addr == "" {
 		return fmt.Errorf("collector address is empty")
 	}
 
-	var request vectorpb.PushEventsRequest
-	if err := proto.Unmarshal(payload, &request); err != nil {
-		return fmt.Errorf("unmarshal push request: %w", err)
-	}
-
 	hostIP, err := s.localIPForAddress(ctx, addr, timeout)
 	if err == nil && hostIP != "" {
-		injectHostIP(&request, hostIP)
+		injectHostIP(request, hostIP)
 	}
 
 	client, err := s.clientForAddress(ctx, addr, timeout)
@@ -89,11 +110,30 @@ func (s *VectorGRPCSender) Send(ctx context.Context, address string, payload []b
 		defer cancel()
 	}
 
-	if _, err := client.PushEvents(callCtx, &request); err != nil {
+	if _, err := client.PushEvents(callCtx, request); err != nil {
 		s.dropAddress(addr)
 		return fmt.Errorf("push events %s: %w", addr, err)
 	}
 	return nil
+}
+
+// buildPushEventsRequest builds protobuf request from internal events.
+// Params: events batch.
+// Returns: protobuf request or conversion error.
+func buildPushEventsRequest(events []Event) (*vectorpb.PushEventsRequest, error) {
+	request := &vectorpb.PushEventsRequest{
+		Events: make([]*eventpb.EventWrapper, 0, len(events)),
+	}
+
+	for idx, event := range events {
+		wrapped, err := encodeEventWrapper(event)
+		if err != nil {
+			return nil, fmt.Errorf("encode event[%d]: %w", idx, err)
+		}
+		request.Events = append(request.Events, wrapped)
+	}
+
+	return request, nil
 }
 
 // clientForAddress returns cached gRPC client or dials and stores a new one.

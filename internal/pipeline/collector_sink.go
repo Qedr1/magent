@@ -189,15 +189,14 @@ func (w *collectorWorker) flushBatch(ctx context.Context) {
 		return
 	}
 
-	payload, err := w.sender.Encode(w.batch)
-	if err != nil {
-		w.logger.Error("encode collector batch failed", slog.String("error", err.Error()))
-		w.batch = w.batch[:0]
-		return
-	}
-
-	if err := w.sendWithFailover(ctx, payload); err != nil {
+	if err := w.sendBatchWithFailover(ctx, w.batch); err != nil {
 		if w.queue != nil {
+			payload, encodeErr := w.sender.Encode(w.batch)
+			if encodeErr != nil {
+				w.logger.Error("encode collector batch failed", slog.String("error", encodeErr.Error()))
+				w.batch = w.batch[:0]
+				return
+			}
 			if queueErr := w.queue.Enqueue(payload); queueErr != nil {
 				w.logger.Error("enqueue failed", slog.String("error", queueErr.Error()))
 			} else {
@@ -219,6 +218,36 @@ func (w *collectorWorker) flushBatch(ctx context.Context) {
 	}
 
 	w.batch = w.batch[:0]
+}
+
+// sendBatchWithFailover attempts event-batch delivery to collector addresses in order.
+// Params: ctx lifecycle context; events batch payload.
+// Returns: nil on first successful send, error when all addresses fail.
+func (w *collectorWorker) sendBatchWithFailover(ctx context.Context, events []Event) error {
+	var (
+		lastErr error
+	)
+
+	for _, address := range w.cfg.Addr {
+		addressValue := strings.TrimSpace(address)
+		if addressValue == "" {
+			continue
+		}
+
+		sendCtx, cancel := context.WithTimeout(ctx, w.cfg.Timeout.Duration)
+		err := w.sender.SendBatch(sendCtx, addressValue, events, w.cfg.Timeout.Duration)
+		cancel()
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+		w.logger.Warn("send attempt failed", slog.String("address", addressValue), slog.String("error", err.Error()))
+	}
+
+	if lastErr == nil {
+		return fmt.Errorf("no collector addresses configured")
+	}
+	return lastErr
 }
 
 // sendWithFailover attempts payload delivery to collector addresses in order.

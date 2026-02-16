@@ -28,3 +28,5 @@ Status rules: `OPEN` by default; set to `DONE` only after user OK + tests pass; 
 - P#24 [DONE]: Make metric percentiles optional (`nil/[]` => last-only aggregation, no `pXX`) with tests.
 - P#25 [DONE]: Add netflow intake path via `http_server` with ClickHouse materialized view (`netflow` raw -> `netflow_pairs`) and e2e correctness check.
 - P#26 [DONE]: Move netflow examples under `docs/example/netflow`, switch `netflow_pairs.src_ip/dst_ip` to `IPv6`, and revalidate e2e in `metrics`.
+- P#27 [DONE]: Run 10-minute extreme-load profiling (all metrics + pprof), analyze hotspots from profiles/codebase, and propose optimization plan.
+- P#28 [DONE]: Implement optimization wave from P#27 (sender fast-path, typed external JSON parse, window alloc cuts, script env cache), rerun 10-minute all-metrics pprof, and confirm alloc/cpu reduction with full-metric pass.

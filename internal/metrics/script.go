@@ -19,7 +19,7 @@ type ScriptCollector struct {
 	metricName string
 	path       string
 	timeout    time.Duration
-	env        map[string]string
+	commandEnv []string
 }
 
 // NewScriptCollector creates a SCRIPT collector.
@@ -31,16 +31,11 @@ func NewScriptCollector(
 	timeout time.Duration,
 	env map[string]string,
 ) *ScriptCollector {
-	copiedEnv := make(map[string]string, len(env))
-	for key, value := range env {
-		copiedEnv[key] = value
-	}
-
 	return &ScriptCollector{
 		metricName: metricName,
 		path:       strings.TrimSpace(path),
 		timeout:    timeout,
-		env:        copiedEnv,
+		commandEnv: mergeEnvironment(env),
 	}
 }
 
@@ -63,7 +58,7 @@ func (c *ScriptCollector) Scrape(ctx context.Context) ([]Point, error) {
 	}
 
 	command := exec.CommandContext(runCtx, c.path)
-	command.Env = mergeEnvironment(c.env)
+	command.Env = c.commandEnv
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
