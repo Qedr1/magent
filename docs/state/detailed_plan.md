@@ -34,3 +34,4 @@ Status rules: `OPEN` by default; set to `DONE` only after user OK + tests pass; 
 - P#31 [DONE]: Validate built-in netflow delivery path uses the shared pipeline, remove legacy external-netflow references/files, add root-rights note for netflow config, and deduplicate/optimize netflow code.
 - P#33 [DONE]: Filter `disk` metric keys to base block devices only (exclude partitions), add unit coverage for device classification/scrape filtering, rebuild/restart runtime agent, and verify ClickHouse emits only base disk keys in recent window.
 - P#34 [DONE]: Update user README with explicit DISK partition-ignore behavior and add practical disk filter examples (`drop_event` + `filter_var`).
+- P#35 [DONE]: Normalize metric sections style in user README: one-line per-metric description and unified `key` purpose wording across built-in and external metric types.
