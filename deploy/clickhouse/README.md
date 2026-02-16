@@ -28,6 +28,7 @@ Script metrics use the same schema; the table name must match `event.metric` (e.
 - Parsed analytics goes to `netflow_pairs` where composed `key` is split into columns:
   - `iface, proto, src_ip, src_port, dst_ip, dst_port`
   - counters: `bytes, packets, flows`
+  - sort key: `ORDER BY (dt, host, iface)` (минимальный ключ для high-ingest)
   - `src_ip` and `dst_ip` are stored as `IPv6` (IPv4 values are normalized to mapped IPv6 form)
 
 Create (raw + pairs + MV):

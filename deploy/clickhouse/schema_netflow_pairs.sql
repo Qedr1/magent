@@ -20,7 +20,7 @@ CREATE TABLE IF NOT EXISTS __DB__.__PAIRS_TABLE__
 )
 ENGINE = MergeTree
 PARTITION BY toYYYYMMDD(dt)
-ORDER BY (dt, host, iface, proto, src_ip, src_port, dst_ip, dst_port)
+ORDER BY (dt, host, iface)
 TTL dt + INTERVAL 4 MONTH;
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS __DB__.__MV_TABLE__

@@ -362,7 +362,7 @@ dst_port: UInt16                                   // destination port
 bytes: UInt64                                      // байты за окно
 packets: UInt64                                    // пакеты за окно
 flows: UInt64                                      // количество flow-записей за окно
-ORDER BY: (dt, host, iface, proto, src_ip, src_port, dst_ip, dst_port)
+ORDER BY: (dt, host, iface)
 PARTITION BY: toYYYYMMDD(dt)
 TTL: dt + INTERVAL 4 MONTH
 ```
