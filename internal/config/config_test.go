@@ -316,6 +316,72 @@ path = "/metrics"
 	}
 }
 
+// TestLoad_ParsesNetflowSections verifies [[metrics.netflow]] decoding and defaults.
+// Params: testing.T for assertions.
+// Returns: none.
+func TestLoad_ParsesNetflowSections(t *testing.T) {
+	path := writeConfig(t, `
+[global]
+dc = "dc1"
+project = "infra"
+role = "db"
+
+[[collector]]
+addr = ["127.0.0.1:6000"]
+
+[collector.batch]
+max_events = 100
+
+[metrics]
+scrape = "5s"
+send = "30s"
+
+[[metrics.netflow]]
+ifaces = ["eth*", "enp*"]
+`)
+
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+
+	if len(cfg.Metrics.Netflow) != 1 {
+		t.Fatalf("unexpected netflow workers count: %d", len(cfg.Metrics.Netflow))
+	}
+	if got := cfg.Metrics.Netflow[0].TopN; got != 20 {
+		t.Fatalf("unexpected netflow default top_n: %d", got)
+	}
+	if got := cfg.Metrics.Netflow[0].Ifaces; len(got) != 2 || got[0] != "eth*" || got[1] != "enp*" {
+		t.Fatalf("unexpected netflow ifaces: %#v", got)
+	}
+}
+
+// TestLoad_RejectsNetflowWithoutIfaces verifies netflow iface mask validation.
+// Params: testing.T for assertions.
+// Returns: none.
+func TestLoad_RejectsNetflowWithoutIfaces(t *testing.T) {
+	path := writeConfig(t, `
+[global]
+dc = "dc1"
+project = "infra"
+role = "db"
+
+[[collector]]
+addr = ["127.0.0.1:6000"]
+
+[collector.batch]
+max_events = 100
+
+[[metrics.netflow]]
+top_n = 10
+`)
+
+	_, err := config.Load(path)
+	if err == nil {
+		t.Fatalf("expected validation error for missing netflow.ifaces")
+	}
+}
+
 // TestLoad_ParsesClickHouseConfig verifies db.clickhouse overrides and env expansion.
 // Params: testing.T for assertions.
 // Returns: none.

@@ -4,12 +4,12 @@ set -euo pipefail
 # Creates standard metric tables in ClickHouse.
 # Params:
 #   $1 - database name (default: metrics)
-#   $2 - optional comma-separated table list (default: cpu,ram,swap,net,disk,fs,process)
+#   $2 - optional comma-separated table list (default: cpu,ram,swap,net,netflow,disk,fs,process)
 # Return:
 #   0 on success; non-zero on client/query failure.
 
 DB_NAME="${1:-metrics}"
-TABLE_LIST_RAW="${2:-cpu,ram,swap,net,disk,fs,process}"
+TABLE_LIST_RAW="${2:-cpu,ram,swap,net,netflow,disk,fs,process}"
 CLICKHOUSE_CLIENT_BIN="${CLICKHOUSE_CLIENT_BIN:-clickhouse-client}"
 
 IFS=',' read -r -a TABLES <<< "$TABLE_LIST_RAW"

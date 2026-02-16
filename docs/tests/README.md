@@ -75,3 +75,11 @@
 - Flow: `http-client (GET JSON) -> agent -> Vector -> ClickHouse`
 - Run:
   - `bash ./docs/tests/run_http_client_e2e.sh`
+
+## Built-in netflow e2e
+
+- Script: `docs/tests/run_netflow_builtin_e2e.sh`
+- Flow: `metrics.netflow (AF_PACKET, no cgo) -> agent -> Vector -> ClickHouse (netflow + netflow_pairs MV)`
+- Run:
+  - `bash ./docs/tests/run_netflow_builtin_e2e.sh`
+  - `bash ./docs/tests/run_netflow_builtin_e2e.sh <db_name>`

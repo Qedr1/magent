@@ -14,15 +14,16 @@ If a detail is not stated here: treat it as unknown and ask the user.
 - Runtime: `internal/app/*` (config+logger+pprof+pipeline)
 - Config: `internal/config/config.go`; example: `config.example.toml`
 - Pipeline: `internal/pipeline/*` (workers, window aggregation, filters, collector sink, queue, sender, http ingest)
-- Metrics: `internal/metrics/*` (built-ins + script + http_client + shared typed points JSON parser)
+- Metrics: `internal/metrics/*` (built-ins incl. AF_PACKET netflow + script + http_client + shared typed points JSON parser)
+- Match utils: `internal/match/*` (shared wildcard matcher used by filters and collectors)
 - Vector configs: `deploy/vector/*` (Vector Protocol v2 receiver + VRL flatten)
 - ClickHouse DDL/scripts: `deploy/clickhouse/*`
 - Tests (bash e2e): `docs/tests/*`
-- Examples: `docs/example/*` (script metric examples + config)
+- Examples: `docs/example/*` (script + built-in netflow configs)
 - Roadmap: `docs/state/detailed_plan.md`; changelog: `docs/state/changelog.md`
 
 ## Architecture/Flow
-1. Pull scrape tick (built-ins/script/http-client) OR push ingest (http-server): source -> []Point{key, values[var]=Value{raw,kind}}.
+1. Pull scrape tick (built-ins incl. netflow/script/http-client) OR push ingest (http-server): source -> []Point{key, values[var]=Value{raw,kind}}.
 2. Window aggregator: append samples per `{key,var}` until send tick.
 3. Worker send tick: aggregate window -> Event -> sinks:
    - CollectorSink (fan-out to each `[[collector]]`; batch/failover/queue)
@@ -87,6 +88,7 @@ Metrics:
 - `[[metrics.ram]]` -> `ram`
 - `[[metrics.swap]]` -> `swap`
 - `[[metrics.net]]` -> `net`
+- `[[metrics.netflow]]` -> `netflow` (AF_PACKET raw capture; no cgo)
 - `[[metrics.disk]]` -> `disk`
 - `[[metrics.fs]]` -> `fs`
 
@@ -117,6 +119,13 @@ HTTP client metrics (poll):
   - `url` supports placeholders (path-escaped): `{dc},{host},{project},{role},{metric},{instance}`
   - response JSON uses the External Metric JSON Contract below
 
+Netflow metric (pull):
+- `[[metrics.netflow]]`:
+  - required: `ifaces=[pattern,...]` (wildcards supported, eg `eth*`,`enp*`,`lo`)
+  - optional: `top_n` (default 20), `scrape`, `send`, worker filters
+  - default aggregation mode: last-only (`percentiles=[]` recommended)
+  - runtime privilege: raw packet capture requires `root` or `CAP_NET_RAW`
+
 ### Collectors / Delivery
 - `[[collector]]` (at least one required):
   - `name` (default `collector-<idx>`), `addr=[host:port,...]` (failover order), `timeout` (default 5s), `retry_interval` (default 3s)
@@ -136,6 +145,7 @@ HTTP client metrics (poll):
   - string fields: `metric`, `key` (`*` wildcard only for `=`/`!=`)
   - `var`: matches against var names present (only `=`/`!=`)
   - any other field name is treated as `<var_name>` and compared against that var's `last` only.
+- wildcard matcher implementation is shared (`internal/match/wildcard.go`) across filter engine and netflow iface matching.
 
 ## Built-in Metric Semantics
 Keys are always strings; values are normalized as above.
@@ -148,6 +158,7 @@ Keys are always strings; values are normalized as above.
   - `tx_bytes_per_sec,rx_bytes_per_sec` (bytes/s)
   - `tx_pkt,rx_pkt` (pkt/s)
   - `tx_err,rx_err,tx_drop,rx_drop` (delta counters)
+- `netflow`: key `iface|proto|src_ip|src_port|dst_ip|dst_port`; vars: `bytes,packets,flows` (window top-N by bytes; each emitted key has `flows=1`)
 - `disk`: key `/dev/<name>`; vars:
   - `rx_io,tx_io` (ops/s)
   - `rx_bytes,tx_bytes` (delta bytes), `rx_bytes_per_sec,tx_bytes_per_sec` (bytes/s)
@@ -188,7 +199,7 @@ Keys are always strings; values are normalized as above.
   - payload: `key,var,agg` (LowCardinality String), `value UInt64`
   - `PARTITION BY toYYYYMMDD(dt)`; `ORDER BY (dt, host, key)`; `TTL dt + INTERVAL 4 MONTH`
 - Bootstrap:
-  - built-ins: `bash deploy/clickhouse/create_builtin_tables.sh <db> "cpu,ram,swap,net,disk,fs,process"`
+  - built-ins: `bash deploy/clickhouse/create_builtin_tables.sh <db> "cpu,ram,swap,net,netflow,disk,fs,process"`
   - script metrics use the same DDL: `bash deploy/clickhouse/create_builtin_tables.sh <db> "<metric_name_1,metric_name_2>"`
 
 ## Ops (Build/Run/Test/E2E)
@@ -201,6 +212,8 @@ Keys are always strings; values are normalized as above.
   - `bash docs/tests/run_collector_delivery_modes.sh [failover_db] [multi_db_a] [multi_db_b]`
   - `bash docs/tests/run_http_server_e2e.sh [db]`
   - `bash docs/tests/run_http_client_e2e.sh [db]`
+  - `bash docs/tests/run_netflow_pairs_e2e.sh [db]` (http-ingest raw->MV pairs path)
+  - `bash docs/tests/run_netflow_builtin_e2e.sh [db]` (built-in AF_PACKET netflow path)
   - `bash docs/tests/run_p19_max_load.sh [db] [duration_s]`
   - `bash docs/tests/run_soak_pprof.sh [db] [soak_seconds] [cpu_profile_seconds]` -> `/tmp/magent-soak-pprof/*`
   - `bash docs/tests/chaos_failover/run.sh [chaos_seconds] [drain_timeout_s]`
@@ -223,4 +236,4 @@ Known test-script quirks (do not change semantics):
 
 ## Project plan (status snapshot)
 - Detailed roadmap: `docs/state/detailed_plan.md`.
-- Current: P#1..P#20 DONE; P#21 OPEN; P#22..P#28 DONE.
+- Current: P#1..P#20 DONE; P#21 OPEN; P#22..P#28 DONE; P#29 OPEN; P#31 DONE.

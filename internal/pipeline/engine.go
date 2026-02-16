@@ -135,6 +135,14 @@ func NewFromConfig(ctx context.Context, cfg *config.Config, logger *slog.Logger)
 		runners = append(runners, worker)
 	}
 
+	netflowWorkers, err := buildNetflowWorkers(cfg, tags, logger, sink)
+	if err != nil {
+		return nil, err
+	}
+	for _, worker := range netflowWorkers {
+		runners = append(runners, worker)
+	}
+
 	workerSet, err = buildWorkersForMetric(
 		"disk",
 		cfg.Metrics.DISK,

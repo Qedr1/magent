@@ -177,6 +177,52 @@ func TestBuildProcessWorkers_UsesExplicitScrapeOverride(t *testing.T) {
 	}
 }
 
+// TestBuildNetflowWorkers verifies netflow worker defaults and last-only percentile mode.
+// Params: testing.T for assertions.
+// Returns: none.
+func TestBuildNetflowWorkers(t *testing.T) {
+	cfg := &config.Config{
+		Metrics: config.MetricsConfig{
+			Scrape: config.Duration{Duration: 5 * time.Second},
+			Send:   config.Duration{Duration: 30 * time.Second},
+			Netflow: []config.NetflowWorkerConfig{
+				{
+					Ifaces: []string{"lo"},
+					TopN:   20,
+				},
+			},
+		},
+	}
+
+	workers, err := buildNetflowWorkers(
+		cfg,
+		EventTags{DC: "dc1", Host: "host1", Project: "infra", Role: "db"},
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		noopSink{},
+	)
+	if err != nil {
+		t.Fatalf("buildNetflowWorkers: %v", err)
+	}
+	if len(workers) != 1 {
+		t.Fatalf("unexpected worker count: %d", len(workers))
+	}
+	if workers[0].cfg.Metric != "netflow" {
+		t.Fatalf("unexpected metric: %q", workers[0].cfg.Metric)
+	}
+	if workers[0].cfg.Instance != "netflow-0" {
+		t.Fatalf("unexpected instance: %q", workers[0].cfg.Instance)
+	}
+	if workers[0].cfg.KeepKnown {
+		t.Fatalf("expected keep_known=false for netflow")
+	}
+	if workers[0].cfg.Percentiles != nil {
+		t.Fatalf("expected netflow default last-only mode")
+	}
+	if _, ok := workers[0].cfg.Collector.(*metrics.NETFLOWCollector); !ok {
+		t.Fatalf("expected netflow worker to use NETFLOWCollector, got %T", workers[0].cfg.Collector)
+	}
+}
+
 // TestNormalizePercentiles verifies inheritance and explicit-empty override behavior.
 // Params: testing.T for assertions.
 // Returns: none.

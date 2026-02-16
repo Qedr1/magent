@@ -30,3 +30,5 @@ Status rules: `OPEN` by default; set to `DONE` only after user OK + tests pass; 
 - P#26 [DONE]: Move netflow examples under `docs/example/netflow`, switch `netflow_pairs.src_ip/dst_ip` to `IPv6`, and revalidate e2e in `metrics`.
 - P#27 [DONE]: Run 10-minute extreme-load profiling (all metrics + pprof), analyze hotspots from profiles/codebase, and propose optimization plan.
 - P#28 [DONE]: Implement optimization wave from P#27 (sender fast-path, typed external JSON parse, window alloc cuts, script env cache), rerun 10-minute all-metrics pprof, and confirm alloc/cpu reduction with full-metric pass.
+- P#29 [OPEN]: Add built-in `metrics.netflow` collector without cgo (AF_PACKET), support multiple interfaces via wildcard masks, aggregate top-N flow tuples, and validate full e2e to ClickHouse `netflow` + `netflow_pairs`.
+- P#31 [DONE]: Validate built-in netflow delivery path uses the shared pipeline, remove legacy external-netflow references/files, add root-rights note for netflow config, and deduplicate/optimize netflow code.

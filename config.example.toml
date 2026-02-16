@@ -56,6 +56,18 @@ send = "30s"
 # drop_var = ["rx_err", "tx_err", "rx_drop", "tx_drop"]
 # drop_event = ["key!=eth*"]
 
+# # Built-in netflow collector (no cgo): captures TCP/UDP flow tuples from selected interfaces.
+# # key format: iface|proto|src_ip|src_port|dst_ip|dst_port
+# # data vars: bytes, packets, flows (default last-only; set percentiles explicitly if needed)
+# # Requires privileged raw packet access: run agent as root (or grant CAP_NET_RAW).
+# [[metrics.netflow]]
+# name = "netflow-main"
+# ifaces = ["eth*", "enp*"]
+# top_n = 20
+# scrape = "5s"
+# send = "30s"
+# percentiles = []
+
 [[metrics.disk]]
 name = "disk-main"
 scrape = "5s"

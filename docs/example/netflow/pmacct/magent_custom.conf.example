@@ -1,9 +1,0 @@
-# Custom plugin runtime options (read by libpmacct_magent_custom.so).
-# The plugin emits top-20 rows every refresh window in magent JSON format:
-# [{"key":"iface|proto|src_ip|src_port|dst_ip|dst_port","data":{"bytes":N,"packets":N,"flows":N}}, ...]
-
-endpoint = http://127.0.0.1:18092/netflow
-method = POST
-timeout_ms = 2000
-top_n = 20
-sort_by = bytes

@@ -20,6 +20,7 @@ const (
 	defaultScriptTimeout   = 5 * time.Second
 	defaultHTTPTimeout     = 5 * time.Second
 	defaultHTTPMaxPending  = 4096
+	defaultNetflowTopN     = 20
 	defaultDBHost          = "127.0.0.1"
 	defaultDBPort          = 8123
 	defaultDBName          = "metrics"
@@ -135,6 +136,7 @@ type MetricsConfig struct {
 	NET         []MetricWorkerConfig                `toml:"net"`
 	DISK        []MetricWorkerConfig                `toml:"disk"`
 	FS          []MetricWorkerConfig                `toml:"fs"`
+	Netflow     []NetflowWorkerConfig               `toml:"netflow"`
 	Process     []ProcessWorkerConfig               `toml:"process"`
 	Script      map[string][]ScriptWorkerConfig     `toml:"script"`
 	HTTPServer  map[string][]HTTPServerWorkerConfig `toml:"http_server"`
@@ -214,6 +216,21 @@ type HTTPClientWorkerConfig struct {
 	DropEvent   []string `toml:"drop_event"`
 	URL         string   `toml:"url"`
 	Timeout     Duration `toml:"timeout"`
+}
+
+// NetflowWorkerConfig defines one built-in netflow worker using raw packet capture.
+// Params: schedule/filter options plus interface selection and top-N controls.
+// Returns: netflow worker runtime config.
+type NetflowWorkerConfig struct {
+	Name        string   `toml:"name"`
+	Scrape      Duration `toml:"scrape"`
+	Send        Duration `toml:"send"`
+	Percentiles []int    `toml:"percentiles"`
+	DropVar     []string `toml:"drop_var"`
+	FilterVar   []string `toml:"filter_var"`
+	DropEvent   []string `toml:"drop_event"`
+	Ifaces      []string `toml:"ifaces"`
+	TopN        uint32   `toml:"top_n"`
 }
 
 // CollectorConfig defines collector target and delivery behavior.
@@ -361,6 +378,12 @@ func (c *Config) applyDefaults() error {
 		c.Metrics.HTTPClient[metricName] = workers
 	}
 
+	for idx := range c.Metrics.Netflow {
+		if c.Metrics.Netflow[idx].TopN == 0 {
+			c.Metrics.Netflow[idx].TopN = defaultNetflowTopN
+		}
+	}
+
 	return nil
 }
 
@@ -462,6 +485,9 @@ func (c *Config) validate() error {
 	if err := validateMetricWorkers("metrics.fs", c.Metrics.FS); err != nil {
 		return err
 	}
+	if err := validateNetflowWorkers("metrics.netflow", c.Metrics.Netflow); err != nil {
+		return err
+	}
 	if err := validateProcessWorkers("metrics.process", c.Metrics.Process); err != nil {
 		return err
 	}
@@ -549,6 +575,42 @@ func validateMetricWorkers(path string, workers []MetricWorkerConfig) error {
 			if p <= 0 || p > 100 {
 				return fmt.Errorf("%s.percentiles contains invalid value %d (must be 1..100)", workerPath, p)
 			}
+		}
+	}
+
+	return nil
+}
+
+// validateNetflowWorkers validates built-in netflow worker config.
+// Params: path is config path; workers are netflow worker definitions.
+// Returns: validation error for invalid values.
+func validateNetflowWorkers(path string, workers []NetflowWorkerConfig) error {
+	for idx, worker := range workers {
+		workerPath := fmt.Sprintf("%s[%d]", path, idx)
+
+		if worker.Scrape.Duration < 0 {
+			return fmt.Errorf("%s.scrape cannot be negative", workerPath)
+		}
+		if worker.Send.Duration < 0 {
+			return fmt.Errorf("%s.send cannot be negative", workerPath)
+		}
+
+		for _, p := range worker.Percentiles {
+			if p <= 0 || p > 100 {
+				return fmt.Errorf("%s.percentiles contains invalid value %d (must be 1..100)", workerPath, p)
+			}
+		}
+
+		if len(worker.Ifaces) == 0 {
+			return fmt.Errorf("%s.ifaces must contain at least one mask", workerPath)
+		}
+		for ifaceIdx, pattern := range worker.Ifaces {
+			if strings.TrimSpace(pattern) == "" {
+				return fmt.Errorf("%s.ifaces[%d] cannot be empty", workerPath, ifaceIdx)
+			}
+		}
+		if worker.TopN == 0 {
+			return fmt.Errorf("%s.top_n must be > 0", workerPath)
 		}
 	}
 
