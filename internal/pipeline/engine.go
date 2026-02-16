@@ -523,16 +523,16 @@ func seriesMax(data series) float64 {
 	return maxValue
 }
 
-// normalizePercentiles resolves metric-specific percentile list with defaults.
+// normalizePercentiles resolves percentile settings with explicit override semantics.
 // Params: defaults from [metrics]; overrides from [[metrics.<name>]].
-// Returns: sorted unique percentile list.
+// Returns: sorted unique percentile list, or nil when percentiles are disabled.
 func normalizePercentiles(defaults, overrides []int) []int {
 	source := defaults
-	if len(overrides) > 0 {
+	if overrides != nil {
 		source = overrides
 	}
 	if len(source) == 0 {
-		source = []int{50, 90, 99}
+		return nil
 	}
 
 	seen := make(map[int]struct{}, len(source))

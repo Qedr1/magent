@@ -64,3 +64,25 @@ func TestAggregateSeries_ZeroSampleIsValid(t *testing.T) {
 		t.Fatalf("unexpected p25: %d", got)
 	}
 }
+
+// TestAggregateSeries_WithoutPercentiles verifies last-only aggregation mode.
+// Params: testing.T for assertions.
+// Returns: none.
+func TestAggregateSeries_WithoutPercentiles(t *testing.T) {
+	values := series{
+		kind:   metrics.KindNumber,
+		values: []float64{1, 2, 3, 4},
+	}
+
+	out := aggregateSeries(values, nil)
+
+	if len(out) != 1 {
+		t.Fatalf("expected only last aggregate, got keys=%v", out)
+	}
+	if got := out["last"].(uint64); got != 4 {
+		t.Fatalf("unexpected last: %d", got)
+	}
+	if _, exists := out["p50"]; exists {
+		t.Fatalf("did not expect percentile keys in last-only mode: %v", out)
+	}
+}

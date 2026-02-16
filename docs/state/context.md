@@ -69,10 +69,15 @@ Load pipeline: read file -> `os.ExpandEnv` -> TOML decode -> defaults -> validat
 - not used by agent runtime today (kept for docs/tests + future)
 
 ### Metric workers
-- Defaults `[metrics]`: `scrape` (<=0 => 5s), `send` (<=0 => 30s), `percentiles` (empty => [50,90,99]).
+- Defaults `[metrics]`: `scrape` (<=0 => 5s), `send` (<=0 => 30s), `percentiles` (optional).
 - Common worker fields:
   - `name` (default `<metric>-<idx>`), `scrape`, `send`, `percentiles`
   - `filter_var` (keep patterns), `drop_var` (drop patterns), `drop_event` (OR conditions)
+- Percentiles resolution:
+  - worker `percentiles = [..]` -> use worker list
+  - worker `percentiles = []` -> disable percentiles for worker (last-only)
+  - worker `percentiles` omitted -> inherit `[metrics].percentiles`
+  - both omitted/empty -> last-only (no `pXX` keys)
 
 Metrics:
 - `[[metrics.cpu]]` -> metric `cpu`
@@ -201,4 +206,4 @@ Known test-script quirks (do not change semantics):
 
 ## Project plan (status snapshot)
 - Detailed roadmap: `docs/state/detailed_plan.md`.
-- Current: P#1..P#20 DONE; P#21 OPEN; P#22 DONE; P#23 DONE.
+- Current: P#1..P#20 DONE; P#21 OPEN; P#22 DONE; P#23 DONE; P#24 DONE.

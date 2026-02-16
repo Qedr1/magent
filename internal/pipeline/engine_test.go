@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"reflect"
 	"testing"
 	"time"
 
@@ -173,5 +174,51 @@ func TestBuildProcessWorkers_UsesExplicitScrapeOverride(t *testing.T) {
 	}
 	if got := workers[0].cfg.ScrapeEvery; got != 45*time.Second {
 		t.Fatalf("unexpected process scrape override: %v", got)
+	}
+}
+
+// TestNormalizePercentiles verifies inheritance and explicit-empty override behavior.
+// Params: testing.T for assertions.
+// Returns: none.
+func TestNormalizePercentiles(t *testing.T) {
+	testCases := []struct {
+		name      string
+		defaults  []int
+		overrides []int
+		expected  []int
+	}{
+		{
+			name:      "inherits defaults when override is absent",
+			defaults:  []int{90, 50, 90},
+			overrides: nil,
+			expected:  []int{50, 90},
+		},
+		{
+			name:      "uses metric override when provided",
+			defaults:  []int{50, 90},
+			overrides: []int{99, 50, 99},
+			expected:  []int{50, 99},
+		},
+		{
+			name:      "explicit empty override disables percentiles",
+			defaults:  []int{50, 90},
+			overrides: []int{},
+			expected:  nil,
+		},
+		{
+			name:      "no defaults and no override keeps percentiles disabled",
+			defaults:  nil,
+			overrides: nil,
+			expected:  nil,
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			got := normalizePercentiles(testCase.defaults, testCase.overrides)
+			if !reflect.DeepEqual(got, testCase.expected) {
+				t.Fatalf("unexpected result: got=%v want=%v", got, testCase.expected)
+			}
+		})
 	}
 }

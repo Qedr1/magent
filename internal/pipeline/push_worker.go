@@ -51,9 +51,6 @@ func newPushWorker(cfg PushWorkerConfig, sink Sink, logger *slog.Logger) (*pushW
 	if cfg.SendEvery <= 0 {
 		return nil, fmt.Errorf("send interval must be > 0")
 	}
-	if len(cfg.Percentiles) == 0 {
-		return nil, fmt.Errorf("percentiles cannot be empty")
-	}
 	if cfg.MaxPending == 0 {
 		return nil, fmt.Errorf("max_pending must be > 0")
 	}

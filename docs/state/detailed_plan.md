@@ -25,3 +25,4 @@ Status rules: `OPEN` by default; set to `DONE` only after user OK + tests pass; 
 - P#21 [OPEN]: 5h soak run (`scrape=10s`, `send=60s`, `pprof=on`) and final profile review.
 - P#22 [DONE]: Add HTTP metrics sources: `http_server` (push) and `http_client` (GET) with shared aggregation/sending rules.
 - P#23 [DONE]: Add e2e scripts for `http_server` and `http_client` ensuring ClickHouse rows (including percentiles) match sources.
+- P#24 [DONE]: Make metric percentiles optional (`nil/[]` => last-only aggregation, no `pXX`) with tests.

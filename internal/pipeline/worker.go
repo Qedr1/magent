@@ -104,9 +104,6 @@ func newMetricWorker(cfg WorkerConfig, sink Sink, logger *slog.Logger) (*metricW
 	if cfg.SendEvery <= 0 {
 		return nil, fmt.Errorf("send interval must be > 0")
 	}
-	if len(cfg.Percentiles) == 0 {
-		return nil, fmt.Errorf("percentiles cannot be empty")
-	}
 	for idx, expression := range cfg.DropEvent {
 		if strings.TrimSpace(expression.Raw) == "" {
 			return nil, fmt.Errorf("drop_event[%d] cannot be empty", idx)

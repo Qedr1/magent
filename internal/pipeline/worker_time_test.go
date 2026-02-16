@@ -133,3 +133,31 @@ func TestMetricWorker_ScrapeKeepsWindowStartDT(t *testing.T) {
 		t.Fatalf("window dt changed within the same send window: first=%d second=%d", firstDT, worker.window.windowDT)
 	}
 }
+
+// TestNewMetricWorker_AllowsEmptyPercentiles verifies last-only mode is accepted.
+// Params: testing.T for assertions.
+// Returns: none.
+func TestNewMetricWorker_AllowsEmptyPercentiles(t *testing.T) {
+	_, err := newMetricWorker(
+		WorkerConfig{
+			Metric:      "cpu",
+			Instance:    "cpu-test",
+			ScrapeEvery: 10 * time.Second,
+			SendEvery:   time.Minute,
+			Percentiles: nil,
+			Collector:   &staticCollector{},
+			Tags: EventTags{
+				DC:      "dc1",
+				Host:    "host1",
+				Project: "infra",
+				Role:    "db",
+			},
+			KeepKnown: true,
+		},
+		&captureSink{},
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+	)
+	if err != nil {
+		t.Fatalf("newMetricWorker must accept empty percentiles: %v", err)
+	}
+}
