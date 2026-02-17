@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"strings"
 	"time"
 
 	"magent/internal/metrics"
@@ -42,45 +41,36 @@ type pushWorker struct {
 // Params: cfg runtime settings; sink event consumer; logger root logger.
 // Returns: worker instance or error.
 func newPushWorker(cfg PushWorkerConfig, sink Sink, logger *slog.Logger) (*pushWorker, error) {
-	if sink == nil {
-		return nil, fmt.Errorf("sink is required")
-	}
-	if logger == nil {
-		return nil, fmt.Errorf("logger is required")
-	}
 	if cfg.SendEvery <= 0 {
 		return nil, fmt.Errorf("send interval must be > 0")
 	}
 	if cfg.MaxPending == 0 {
 		return nil, fmt.Errorf("max_pending must be > 0")
 	}
-	for idx, expression := range cfg.DropEvent {
-		if strings.TrimSpace(expression.Raw) == "" {
-			return nil, fmt.Errorf("drop_event[%d] cannot be empty", idx)
-		}
-	}
 
-	instance := strings.TrimSpace(cfg.Instance)
-	if instance == "" {
-		instance = "default"
-	}
-	cfg.Instance = instance
-
-	return &pushWorker{
-		cfg: cfg,
-		window: newWindow(windowConfig{
+	window, instance, err := buildWorkerWindow(
+		workerWindowBaseConfig{
 			Metric:      cfg.Metric,
 			Instance:    cfg.Instance,
 			Percentiles: cfg.Percentiles,
 			Tags:        cfg.Tags,
-			Sink:        sink,
-			Logger:      logger,
 			EmitFilter:  cfg.EmitFilter,
 			KeepKnown:   cfg.KeepKnown,
 			DropVar:     cfg.DropVar,
 			FilterVar:   cfg.FilterVar,
 			DropEvent:   cfg.DropEvent,
-		}),
+		},
+		sink,
+		logger,
+	)
+	if err != nil {
+		return nil, err
+	}
+	cfg.Instance = instance
+
+	return &pushWorker{
+		cfg:      cfg,
+		window:   window,
 		incoming: make(chan pushBatch, cfg.MaxPending),
 	}, nil
 }

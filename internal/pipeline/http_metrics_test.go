@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net"
 	"testing"
+	"time"
 
 	"magent/internal/config"
 )
@@ -54,4 +55,40 @@ func TestBuildHTTPServerRunners_ReleasesListenerOnError(t *testing.T) {
 		t.Fatalf("listener leak detected on %s: %v", listenAddr, bindErr)
 	}
 	_ = ln.Close()
+}
+
+// TestBuildHTTPClientWorkers_LastOnlyAlignsScrapeToSend verifies scrape alignment for HTTP client workers without percentiles.
+// Params: testing.T for assertions.
+// Returns: none.
+func TestBuildHTTPClientWorkers_LastOnlyAlignsScrapeToSend(t *testing.T) {
+	cfg := &config.Config{
+		Metrics: config.MetricsConfig{
+			Scrape: config.Duration{Duration: 5 * time.Second},
+			Send:   config.Duration{Duration: 30 * time.Second},
+			HTTPClient: map[string][]config.HTTPClientWorkerConfig{
+				"demo": {
+					{
+						URL:     "http://127.0.0.1:18080/metrics",
+						Timeout: config.Duration{Duration: 2 * time.Second},
+					},
+				},
+			},
+		},
+	}
+
+	workers, err := buildHTTPClientWorkers(
+		cfg,
+		EventTags{DC: "dc1", Host: "host1", Project: "infra", Role: "db"},
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		httpNoopSink{},
+	)
+	if err != nil {
+		t.Fatalf("buildHTTPClientWorkers: %v", err)
+	}
+	if len(workers) != 1 {
+		t.Fatalf("unexpected worker count: %d", len(workers))
+	}
+	if got := workers[0].cfg.ScrapeEvery; got != 30*time.Second {
+		t.Fatalf("unexpected aligned scrape interval: %v", got)
+	}
 }

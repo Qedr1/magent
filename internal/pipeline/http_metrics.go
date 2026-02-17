@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -39,42 +38,32 @@ func buildHTTPClientWorkers(
 		definitions := cfg.Metrics.HTTPClient[metricName]
 
 		for idx, definition := range definitions {
-			dropConditions, err := compileDropConditions(definition.DropEvent)
+			resolved, err := resolvePullWorkerRuntime(
+				logger,
+				metric,
+				idx,
+				metric,
+				definition.Name,
+				cfg.Metrics.Scrape.Duration,
+				definition.Scrape.Duration,
+				cfg.Metrics.Send.Duration,
+				definition.Send.Duration,
+				cfg.Metrics.Percentiles,
+				definition.Percentiles,
+				definition.DropEvent,
+			)
 			if err != nil {
 				return nil, fmt.Errorf("build http_client worker %s[%d]: %w", metric, idx, err)
 			}
 
-			scrapeEvery := cfg.Metrics.Scrape.Duration
-			if scrapeEvery <= 0 {
-				scrapeEvery = defaultScrapeEvery
-			}
-			if definition.Scrape.Duration > 0 {
-				scrapeEvery = definition.Scrape.Duration
-			}
-
-			sendEvery := cfg.Metrics.Send.Duration
-			if sendEvery <= 0 {
-				sendEvery = defaultSendEvery
-			}
-			if definition.Send.Duration > 0 {
-				sendEvery = definition.Send.Duration
-			}
-
-			percentiles := normalizePercentiles(cfg.Metrics.Percentiles, definition.Percentiles)
-
-			instance := strings.TrimSpace(definition.Name)
-			if instance == "" {
-				instance = metric + "-" + strconv.Itoa(idx)
-			}
-
-			resolvedURL := expandURLTemplate(definition.URL, tags, metric, instance)
+			resolvedURL := expandURLTemplate(definition.URL, tags, metric, resolved.instance)
 			worker, err := newMetricWorker(
 				WorkerConfig{
 					Metric:      metric,
-					Instance:    instance,
-					ScrapeEvery: scrapeEvery,
-					SendEvery:   sendEvery,
-					Percentiles: percentiles,
+					Instance:    resolved.instance,
+					ScrapeEvery: resolved.scrapeEvery,
+					SendEvery:   resolved.sendEvery,
+					Percentiles: resolved.percentiles,
 					Collector: metrics.NewHTTPClientCollector(
 						metric,
 						resolvedURL,
@@ -90,7 +79,7 @@ func buildHTTPClientWorkers(
 					KeepKnown: true,
 					DropVar:   definition.DropVar,
 					FilterVar: definition.FilterVar,
-					DropEvent: dropConditions,
+					DropEvent: resolved.dropCondition,
 				},
 				sink,
 				logger,
@@ -147,39 +136,33 @@ func buildHTTPServerRunners(
 		definitions := cfg.Metrics.HTTPServer[metricName]
 
 		for idx, definition := range definitions {
-			dropConditions, err := compileDropConditions(definition.DropEvent)
+			resolved, err := resolvePushWorkerRuntime(
+				idx,
+				metric,
+				definition.Name,
+				cfg.Metrics.Send.Duration,
+				definition.Send.Duration,
+				cfg.Metrics.Percentiles,
+				definition.Percentiles,
+				definition.DropEvent,
+			)
 			if err != nil {
 				cleanupServers()
 				return nil, fmt.Errorf("build http_server worker %s[%d]: %w", metric, idx, err)
 			}
 
-			sendEvery := cfg.Metrics.Send.Duration
-			if sendEvery <= 0 {
-				sendEvery = defaultSendEvery
-			}
-			if definition.Send.Duration > 0 {
-				sendEvery = definition.Send.Duration
-			}
-
-			percentiles := normalizePercentiles(cfg.Metrics.Percentiles, definition.Percentiles)
-
-			instance := strings.TrimSpace(definition.Name)
-			if instance == "" {
-				instance = metric + "-" + strconv.Itoa(idx)
-			}
-
 			worker, err := newPushWorker(
 				PushWorkerConfig{
 					Metric:      metric,
-					Instance:    instance,
-					SendEvery:   sendEvery,
-					Percentiles: percentiles,
+					Instance:    resolved.instance,
+					SendEvery:   resolved.sendEvery,
+					Percentiles: resolved.percentiles,
 					Tags:        tags,
 					KeepKnown:   false,
 					MaxPending:  definition.MaxPending,
 					DropVar:     definition.DropVar,
 					FilterVar:   definition.FilterVar,
-					DropEvent:   dropConditions,
+					DropEvent:   resolved.dropCondition,
 				},
 				sink,
 				logger,
@@ -220,7 +203,7 @@ func buildHTTPServerRunners(
 			group.mux.HandleFunc(path, makeHTTPIngestHandler(
 				worker,
 				metric,
-				instance,
+				resolved.instance,
 				definition.Format,
 				definition.Include,
 				definition.VarMode,
