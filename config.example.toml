@@ -48,6 +48,11 @@ name = "swap-main"
 scrape = "5s"
 send = "30s"
 
+[[metrics.kernel]]
+name = "kernel-main"
+scrape = "5s"
+send = "30s"
+
 [[metrics.net]]
 name = "net-main"
 scrape = "5s"

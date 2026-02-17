@@ -367,6 +367,40 @@ func TestBuildWorkersForMetric_LastOnlyAlignsScrapeToSend(t *testing.T) {
 	}
 }
 
+// TestBuildWorkersForMetric_KernelCollector verifies generic builder can wire kernel collector type.
+// Params: testing.T for assertions.
+// Returns: none.
+func TestBuildWorkersForMetric_KernelCollector(t *testing.T) {
+	workers, err := buildWorkersForMetric(
+		"kernel",
+		[]config.MetricWorkerConfig{
+			{Name: "kernel-main"},
+		},
+		config.MetricsConfig{
+			Scrape: config.Duration{Duration: 5 * time.Second},
+			Send:   config.Duration{Duration: 30 * time.Second},
+		},
+		EventTags{DC: "dc1", Host: "host1", Project: "infra", Role: "db"},
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		noopSink{},
+		func(_ config.MetricWorkerConfig) metrics.Collector {
+			return metrics.NewKERNELCollector("kernel")
+		},
+	)
+	if err != nil {
+		t.Fatalf("buildWorkersForMetric: %v", err)
+	}
+	if len(workers) != 1 {
+		t.Fatalf("unexpected worker count: %d", len(workers))
+	}
+	if workers[0].cfg.Metric != "kernel" {
+		t.Fatalf("unexpected metric: %q", workers[0].cfg.Metric)
+	}
+	if _, ok := workers[0].cfg.Collector.(*metrics.KERNELCollector); !ok {
+		t.Fatalf("expected KERNELCollector, got %T", workers[0].cfg.Collector)
+	}
+}
+
 // TestNormalizePercentiles verifies inheritance and explicit-empty override behavior.
 // Params: testing.T for assertions.
 // Returns: none.

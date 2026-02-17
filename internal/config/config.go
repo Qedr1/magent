@@ -134,6 +134,7 @@ type MetricsConfig struct {
 	CPU         []MetricWorkerConfig                `toml:"cpu"`
 	RAM         []MetricWorkerConfig                `toml:"ram"`
 	SWAP        []MetricWorkerConfig                `toml:"swap"`
+	Kernel      []MetricWorkerConfig                `toml:"kernel"`
 	NET         []MetricWorkerConfig                `toml:"net"`
 	DISK        []MetricWorkerConfig                `toml:"disk"`
 	FS          []MetricWorkerConfig                `toml:"fs"`
@@ -473,6 +474,9 @@ func (c *Config) validate() error {
 		return err
 	}
 	if err := validateMetricWorkers("metrics.swap", c.Metrics.SWAP); err != nil {
+		return err
+	}
+	if err := validateMetricWorkers("metrics.kernel", c.Metrics.Kernel); err != nil {
 		return err
 	}
 	if err := validateMetricWorkers("metrics.net", c.Metrics.NET); err != nil {

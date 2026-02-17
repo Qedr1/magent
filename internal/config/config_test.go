@@ -559,6 +559,52 @@ ifaces = ["eth*", "enp*"]
 	}
 }
 
+// TestLoad_ParsesKernelSections verifies [[metrics.kernel]] decoding.
+// Params: testing.T for assertions.
+// Returns: none.
+func TestLoad_ParsesKernelSections(t *testing.T) {
+	path := writeConfig(t, `
+[global]
+dc = "dc1"
+project = "infra"
+role = "db"
+
+[[collector]]
+addr = ["127.0.0.1:6000"]
+
+[collector.batch]
+max_events = 100
+
+[metrics]
+scrape = "5s"
+send = "30s"
+
+[[metrics.kernel]]
+name = "kernel-main"
+scrape = "2s"
+send = "10s"
+`)
+
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+
+	if len(cfg.Metrics.Kernel) != 1 {
+		t.Fatalf("unexpected kernel workers count: %d", len(cfg.Metrics.Kernel))
+	}
+	worker := cfg.Metrics.Kernel[0]
+	if worker.Name != "kernel-main" {
+		t.Fatalf("unexpected kernel worker name: %q", worker.Name)
+	}
+	if worker.Scrape.Duration != 2*time.Second {
+		t.Fatalf("unexpected kernel scrape: %v", worker.Scrape.Duration)
+	}
+	if worker.Send.Duration != 10*time.Second {
+		t.Fatalf("unexpected kernel send: %v", worker.Send.Duration)
+	}
+}
+
 // TestLoad_RejectsNetflowWithoutIfaces verifies netflow iface mask validation.
 // Params: testing.T for assertions.
 // Returns: none.

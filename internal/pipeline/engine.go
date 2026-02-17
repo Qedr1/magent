@@ -107,6 +107,13 @@ func NewFromConfig(ctx context.Context, cfg *config.Config, logger *slog.Logger)
 			},
 		},
 		{
+			metric:      "kernel",
+			definitions: cfg.Metrics.Kernel,
+			factory: func(_ config.MetricWorkerConfig) metrics.Collector {
+				return metrics.NewKERNELCollector("kernel")
+			},
+		},
+		{
 			metric:      "net",
 			definitions: cfg.Metrics.NET,
 			factory: func(_ config.MetricWorkerConfig) metrics.Collector {
