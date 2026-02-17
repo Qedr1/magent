@@ -31,6 +31,7 @@ func run() int {
 	)
 
 	flag.StringVar(&configPath, "config", "config.toml", "path to TOML config")
+	flag.BoolVar(&showInfo, "v", false, "show build information")
 	flag.BoolVar(&showInfo, "version", false, "show build information")
 	flag.Parse()
 
