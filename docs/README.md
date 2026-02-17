@@ -223,7 +223,7 @@ LowCardinality снижает накладные расходы на дубли�
 ### NETFLOW
 Системная pull-метрика top-N сетевых flow-пар по интерфейсам (без cgo).
 - секция конфига: `[[metrics.netflow]]`
-- использует ту же кодовую базу доставки, что и другие pull-метрики: `scrape -> window aggregate -> collector batch/queue/failover -> Vector -> ClickHouse`
+- использует ту же кодовую базу доставки, что и другие pull-метрики: `scrape -> window aggregate -> collector batch/queue/failover -> Vector -> ClickHouse`. mat. view разворачивает значения составного ключа в отдельную таблицу `netflow_pairs`
 - key: строковый идентификатор сущности метрики; составной ключ `iface|proto|src_ip|src_port|dst_ip|dst_port`.
 - vars: `bytes`, `packets`, `flows`
 - все счетчики считаются за окно `scrape` и сбрасываются после каждого опроса (не монотонные):
@@ -238,10 +238,10 @@ LowCardinality снижает накладные расходы на дубли�
 - для raw-capture нужны привилегии: запуск агента от `root` (или capability `CAP_NET_RAW`)
 - рекомендуемый режим: `percentiles = []` (last-only)
 
+
 ### PROCESS
 Системная метрика процессов с отбором по порогам `cpu_util`/`ram_util`/`iops` (логика ИЛИ, достаточно одного порога за окно отправки).
 - секция конфига: `[[metrics.process]]`
-- пороги задаются в `[[metrics.process]]`
 - key: строковый идентификатор сущности метрики; `<cmd>`.
 - cpu_util:  утилизация  CPU процессом. uint8, %
 - ram_util:  утилизация RAM процессом = `rss_process/ram_total_host*100`. uint8, %
@@ -276,7 +276,15 @@ LowCardinality снижает накладные расходы на дубли�
 - `url` поддерживает переменные в пути (path-escaped): `{dc},{host},{project},{role},{metric},{instance}`
 - `instance` = имя воркера (`name` в конфиге или автогенерированное), используется только для URL и логов (в событие/БД не попадает)
 
-### Формат внешних источников (SCRIPT/HTTP)
+
+### Внешние метрики (script, http_client, http_server)
+- отдельный тип метрики формируемый произвольным внешним скриптом или приложением
+- применяются все правила обычных метрик
+- stdout скрипта имеет формат по `format` в конфиге (`json` или `prometheus`)
+- ненулевой exit code → данные не отправляются
+- секции скриптов именуются по шаблону [[metrics.script.<name>]] (например [[metrics.script.db]], [[metrics.script.kafka]])
+- доп. переменные в конфиге: `path`, `timeout`, `env`, `format`, `var_mode`
+- общие для всех метрик поля (dt, dts, глобальные теги) формируются агентом а не скриптом
 - поддерживаются два формата: `json` и `prometheus`
 - `format=json`: один и тот же JSON-контракт для stdout скрипта, body HTTP-SERVER, response HTTP-CLIENT
 - root: объект или массив объектов; каждый объект = 1 сущность метрики (1 `key`)
@@ -290,23 +298,14 @@ LowCardinality снижает накладные расходы на дубли�
 - общий лимит payload для `json` и `prometheus`: `16 MiB` (больше — отклоняется)
 - для внешних метрик (`script/http_server/http_client`) без данных в окне событие не отправляется (synthetic zero не генерируется)
 
-### Внешние скрипты
-- отдельный тип метрики формируемый произвольным внешним скриптом или приложением
-- применяются все правила обычных метрик
-- stdout скрипта имеет формат по `format` в конфиге (`json` или `prometheus`)
-- ненулевой exit code → данные не отправляются
-- секции скриптов именуются по шаблону [[metrics.script.<name>]] (например [[metrics.script.db]], [[metrics.script.kafka]])
-- доп. переменные в конфиге: `path`, `timeout`, `env`, `format`, `var_mode`
-- общие для всех метрик поля (dt, dts, глобальные теги) формируются агентом а не скриптом
 
 ### Конфиг
 - раздел [metrics] параметры по умолчанию для всех метрик. [[metrics.<name>]] раздел конкретной метрики. [[metrics.script.<name>]] метрика собираемая внешним скриптом. [[metrics.http_server.<name>]] push HTTP метрика. [[metrics.http_client.<name>]] pull HTTP метрика
 - для `[[metrics.script.<name>]]`: `format` по умолчанию `json`; для `prometheus` используется `var_mode=full|short`, а отбор — через `filter_var/drop_var/drop_event`
 - для `[[metrics.http_server.<name>]]`: `format` по умолчанию `json`; для `prometheus` используется `var_mode=full|short`, а отбор — через `filter_var/drop_var/drop_event`
 - для `[[metrics.http_client.<name>]]`: `format` по умолчанию `json`; для `prometheus` используется `var_mode=full|short`, а отбор — через `filter_var/drop_var/drop_event`
-- `percentiles` опциональны в `[metrics]` и в `[[metrics.<name>]]`
-- `percentiles` — массив целых значений (например `[50,90,99]`); ключи в JSON формируются как `pXX`
-- если `percentiles` не заданы ни глобально, ни в метрике, агрегируется только `last` (без `pXX`)
+- `percentiles` — агрегаты значений раз в период отправки по периодам опроса. массив целых значений (например `[50,90,99]`); ключи в JSON формируются как `pXX`
+- если `percentiles` не заданы ни глобально, ни в метрике, агрегации нет. только последние измеренных значения за период отправки `last` (без `pXX`)
 - если глобальные `percentiles` заданы, метрика наследует их по умолчанию
 - если в конкретной метрике указать `percentiles = []`, процентили для этой метрики отключаются (только `last`)
 - интервалы scrape/send задаются с суффиксами времени (например 5s, 1m). присутствуют глобально и могут быть переопределены в каждой метрике
