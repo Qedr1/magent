@@ -233,8 +233,9 @@ LowCardinality снижает накладные расходы на дубли�
 - iops: операции чтения и записи процессом с блочного устройства. uint64, опер/сек
 
 ### SCRIPT
-Пользовательская pull-метрика из внешнего скрипта `[[metrics.script.<name>]]`, где stdout содержит JSON `{key,data}` (объект или массив объектов).
-- key: строковый идентификатор сущности метрики; приходит из поля `key` каждой сущности во внешнем JSON.
+Пользовательская pull-метрика из внешнего скрипта `[[metrics.script.<name>]]`, где stdout содержит `format=json` (`{key,data}`) или `format=prometheus` (text exposition).
+- key: строковый идентификатор сущности метрики; для `json` берётся из поля `key`, для `prometheus` фиксирован `total` (labels игнорируются).
+- для `format=prometheus`: обязательны `include` (разрешённые имена), `var_mode=full|short`; принимаются только `gauge/counter`.
 - при ненулевом exit code скрипта данные не отправляются
 - для каждого скрипта создаётся отдельная таблица в ClickHouse (`<name>`)
 - схема хранения для script-метрик полностью совпадает с остальными: `dt`, `dts`, `dtv`, теги, `key`, `var`, `agg`, `value`
@@ -243,43 +244,48 @@ LowCardinality снижает накладные расходы на дубли�
 ### HTTP-SERVER
 Пользовательская push-метрика: агент поднимает HTTP endpoint, принимает внешние данные и отправляет их по общим правилам.
 - секция конфига: `[[metrics.http_server.<name>]]`
-- key: строковый идентификатор сущности метрики; приходит из поля `key` каждой сущности в входном JSON.
-- HTTP: `POST http://<listen><path>`; тело запроса JSON (формат см. ниже); успешный приём: `204`
+- key: строковый идентификатор сущности метрики; для `json` берётся из поля `key`, для `prometheus` фиксирован `total` (labels игнорируются).
+- HTTP: `POST http://<listen><path>`; тело запроса в формате `json` или `prometheus` (по `format` в конфиге); успешный приём: `204`
+- для `format=prometheus`: обязательны `include`, `var_mode=full|short`; принимаются только `gauge/counter`.
 - нет периода `scrape` (данные приходят извне); используется только `send` (период агрегации/отправки)
 - `max_pending` ограничивает буфер принятых пакетов; при переполнении политика фиксированная: сохраняем старое, дропаем новое (`503`)
 
 ### HTTP-CLIENT
-Пользовательская pull-метрика: агент делает `GET` по URL, парсит JSON-ответ и отправляет данные по общим правилам.
+Пользовательская pull-метрика: агент делает `GET` по URL, парсит ответ в `json` или `prometheus` и отправляет данные по общим правилам.
 - секция конфига: `[[metrics.http_client.<name>]]`
-- key: строковый идентификатор сущности метрики; для `json` берётся из поля `key`, для `prometheus` собирается из `key_from_labels`.
+- key: строковый идентификатор сущности метрики; для `json` берётся из поля `key`, для `prometheus` фиксирован `total` (labels игнорируются).
 - поддерживаемые форматы ответа: `format=json` (контракт `{key,data}`) и `format=prometheus` (text exposition, только gauge/counter)
-- для `format=prometheus`: `include` (разрешённые имена метрик), `key_from_labels` (из каких labels формируется key), `var_mode=full|short`
-- HTTP: `GET` (пока только GET); ответ должен быть JSON того же формата что и у внешних скриптов (см. ниже)
+- для `format=prometheus`: `include` (разрешённые имена метрик), `var_mode=full|short`
+- HTTP: `GET` (пока только GET); формат ответа определяется полем `format`
 - `url` поддерживает переменные в пути (path-escaped): `{dc},{host},{project},{role},{metric},{instance}`
 - `instance` = имя воркера (`name` в конфиге или автогенерированное), используется только для URL и логов (в событие/БД не попадает)
 
 ### Формат внешних источников (SCRIPT/HTTP)
-- один и тот же JSON-формат для: stdout скрипта, body HTTP-SERVER, response HTTP-CLIENT при `format=json`
+- поддерживаются два формата: `json` и `prometheus`
+- `format=json`: один и тот же JSON-контракт для stdout скрипта, body HTTP-SERVER, response HTTP-CLIENT
 - root: объект или массив объектов; каждый объект = 1 сущность метрики (1 `key`)
 - минимальный пример:
 ```json
 {"key":"total","data":{"util":{"last":67}}}
 ```
 - `data.<var>`: число, bool (0/1) или объект `{last: <number>, kind?: "percent"|"number"}`
+- `format=prometheus`: text exposition; принимаются только `gauge/counter`; `key` фиксирован `total`
 - общие поля события (dt/dts/теги/metric) добавляет агент; `last/pXX` считает агент и уже их сохраняет/отправляет
 
 ### Внешние скрипты
 - отдельный тип метрики формируемый произвольным внешним скриптом или приложением
 - применяются все правила обычных метрик
-- stdout скрипта имеет JSON структуру внешней метрики (см. выше)
+- stdout скрипта имеет формат по `format` в конфиге (`json` или `prometheus`)
 - ненулевой exit code → данные не отправляются
 - секции скриптов именуются по шаблону [[metrics.script.<name>]] (например [[metrics.script.db]], [[metrics.script.kafka]])
-- доп. переменные в конфиге  path - путь до скрипта, timeout - таймаут выполнения, env - переменные среды которые нужно передать
+- доп. переменные в конфиге: `path`, `timeout`, `env`, `format`, `include`, `var_mode`
 - общие для всех метрик поля (dt, dts, глобальные теги) формируются агентом а не скриптом
 
 ### Конфиг
 - раздел [metrics] параметры по умолчанию для всех метрик. [[metrics.<name>]] раздел конкретной метрики. [[metrics.script.<name>]] метрика собираемая внешним скриптом. [[metrics.http_server.<name>]] push HTTP метрика. [[metrics.http_client.<name>]] pull HTTP метрика
-- для `[[metrics.http_client.<name>]]`: `format` по умолчанию `json`; для `prometheus` обязательны `include`, доступны `key_from_labels`, `var_mode=full|short`
+- для `[[metrics.script.<name>]]`: `format` по умолчанию `json`; для `prometheus` обязательны `include`, `var_mode=full|short`
+- для `[[metrics.http_server.<name>]]`: `format` по умолчанию `json`; для `prometheus` обязательны `include`, `var_mode=full|short`
+- для `[[metrics.http_client.<name>]]`: `format` по умолчанию `json`; для `prometheus` обязательны `include`, `var_mode=full|short`
 - `percentiles` опциональны в `[metrics]` и в `[[metrics.<name>]]`
 - `percentiles` — массив целых значений (например `[50,90,99]`); ключи в JSON формируются как `pXX`
 - если `percentiles` не заданы ни глобально, ни в метрике, агрегируется только `last` (без `pXX`)
