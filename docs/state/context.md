@@ -125,7 +125,7 @@ HTTP client metrics (poll):
 Netflow metric (pull):
 - `[[metrics.netflow]]`:
   - required: `ifaces=[pattern,...]` (wildcards supported, eg `eth*`,`enp*`,`lo`)
-  - optional: `top_n` (default 20), `scrape`, `send`, worker filters
+  - optional: `top_n` (default 20), `flow_idle_timeout` (default `10s`, UDP flow restart timeout), `scrape`, `send`, worker filters
   - default aggregation mode: last-only (`percentiles=[]` recommended)
   - runtime privilege: raw packet capture requires `root` or `CAP_NET_RAW`
 
@@ -161,7 +161,7 @@ Keys are always strings; values are normalized as above.
   - `tx_bytes_per_sec,rx_bytes_per_sec` (bytes/s)
   - `tx_pkt,rx_pkt` (pkt/s)
   - `tx_err,rx_err,tx_drop,rx_drop` (delta counters)
-- `netflow`: key `iface|proto|src_ip|src_port|dst_ip|dst_port`; vars: `bytes,packets,flows` (window top-N by bytes; each emitted key has `flows=1`)
+- `netflow`: key `iface|proto|src_ip|src_port|dst_ip|dst_port`; vars: `bytes,packets,flows` (window top-N by bytes, counters per scrape window; `flows` increments for TCP on `SYN&&!ACK`, for UDP on inactivity gap `>= flow_idle_timeout`)
 - `disk`: key `/dev/<name>`; vars:
   - `rx_io,tx_io` (ops/s)
   - `rx_bytes,tx_bytes` (delta bytes), `rx_bytes_per_sec,tx_bytes_per_sec` (bytes/s)
@@ -224,6 +224,7 @@ Keys are always strings; values are normalized as above.
   - `bash docs/tests/run_p19_max_load.sh [db] [duration_s]`
   - `bash docs/tests/run_soak_pprof.sh [db] [soak_seconds] [cpu_profile_seconds]` -> `/tmp/magent-soak-pprof/*`
   - `bash docs/tests/chaos_failover/run.sh [chaos_seconds] [drain_timeout_s]`
+  - cross-check recipe (ad-hoc): run isolated `net+netflow` loopback load and compare same `dts` window in ClickHouse (`sum(net.rx_bytes+net.tx_bytes)` must equal `sum(netflow.bytes)`; `sum(flows)` to controlled test `dst_port` must equal generated connection count)
 
 Known test-script quirks (do not change semantics):
 - `docs/tests/chaos_failover/run.sh` progress log checks queue bytes in `${QUEUE_DIR}/events.bin` but actual queue file is `${QUEUE_DIR}/queue.bin`; PASS criteria is distinct delivered keys, not queue_bytes.
@@ -244,7 +245,12 @@ Known test-script quirks (do not change semantics):
   - reliability: graceful final collector flush on shutdown now uses bounded background timeout context; constructor cleanup closes already-opened queue/listener resources on build errors.
   - runtime perf: wildcard/drop filters are precompiled; `http_client` Prometheus parser is precompiled per collector; netflow uses sharded counters and top-N min-heap selection.
   - validation: `go test ./...`, `go vet ./...`, short soak+pprof (`docs/tests/run_soak_pprof.sh metrics 120 20`) and high-load pprof run (`/tmp/magent-p40-pprof/*`) passed; dominant CPU remains syscall/gopsutil-heavy, expected for current collector model.
+- Overnight contour + live profile capture (2026-02-17, P#43/P#44):
+  - runtime contour (`scrape=10s`, `send=60s`, `pprof=on`) stayed healthy overnight; fresh data lag stayed within send window (~41s during morning check) across `cpu/process/netflow/vector_internal`.
+  - no new runtime errors after overnight start; only historical parse errors from pre-fix window remained in log history.
+  - captured live pprof set in `/tmp/magent-runtime/profile-20260217-074727/*` (`cpu.pb.gz`, `heap.pb.gz`, `goroutine.txt`, top reports).
+  - latest profile summary: CPU sample density low (`45s`, `80ms` samples, mostly syscall/wait + netflow recv loop + process scrape path); heap in-use about `1MB` (`runtime.malg`, `pipeline.aggregateSeries`).
 
 ## Project plan (status snapshot)
 - Detailed roadmap: `docs/state/detailed_plan.md`.
-- Current: P#1..P#20 DONE; P#21 OPEN; P#22..P#28 DONE; P#29 OPEN; P#31 DONE; P#33..P#35 DONE; P#37..P#40 DONE.
+- Current: P#1..P#20 DONE; P#21 OPEN; P#22..P#28 DONE; P#29 OPEN; P#31 DONE; P#33..P#35 DONE; P#37..P#40 DONE; P#42 OPEN; P#43..P#44 DONE.
