@@ -254,4 +254,4 @@ Known test-script quirks (do not change semantics):
 
 ## Project plan (status snapshot)
 - Detailed roadmap: `docs/state/detailed_plan.md`.
-- Current: P#1..P#20 DONE; P#21 OPEN; P#22..P#28 DONE; P#29 OPEN; P#31 DONE; P#33..P#35 DONE; P#37..P#40 DONE; P#42 OPEN; P#43..P#44 DONE; P#49..P#51 DONE.
+- Current: P#1..P#20 DONE; P#21 OPEN; P#22..P#28 DONE; P#29 OPEN; P#31 DONE; P#33..P#35 DONE; P#37..P#40 DONE; P#42 OPEN; P#43..P#44 DONE; P#49..P#52 DONE.

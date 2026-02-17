@@ -287,6 +287,8 @@ LowCardinality снижает накладные расходы на дубли�
 - `data.<var>`: число, bool (0/1) или объект `{last: <number>, kind?: "percent"|"number"}`
 - `format=prometheus`: text exposition; принимаются только `gauge/counter`; `key` фиксирован `total`
 - общие поля события (dt/dts/теги/metric) добавляет агент; `last/pXX` считает агент и уже их сохраняет/отправляет
+- общий лимит payload для `json` и `prometheus`: `16 MiB` (больше — отклоняется)
+- для внешних метрик (`script/http_server/http_client`) без данных в окне событие не отправляется (synthetic zero не генерируется)
 
 ### Внешние скрипты
 - отдельный тип метрики формируемый произвольным внешним скриптом или приложением
