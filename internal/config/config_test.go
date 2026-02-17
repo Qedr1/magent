@@ -565,6 +565,9 @@ ifaces = ["eth*", "enp*"]
 	if got := cfg.Metrics.Netflow[0].Ifaces; len(got) != 2 || got[0] != "eth*" || got[1] != "enp*" {
 		t.Fatalf("unexpected netflow ifaces: %#v", got)
 	}
+	if got := cfg.Metrics.Netflow[0].FlowIdleTimeout.Duration; got != 10*time.Second {
+		t.Fatalf("unexpected netflow default flow_idle_timeout: %v", got)
+	}
 }
 
 // TestLoad_RejectsNetflowWithoutIfaces verifies netflow iface mask validation.

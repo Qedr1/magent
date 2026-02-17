@@ -64,6 +64,7 @@ send = "30s"
 # name = "netflow-main"
 # ifaces = ["eth*", "enp*"]
 # top_n = 20
+# flow_idle_timeout = "10s" # UDP flow restart timeout (new flow after inactivity)
 # scrape = "5s"
 # send = "30s"
 # percentiles = []

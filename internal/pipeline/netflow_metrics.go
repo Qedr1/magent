@@ -3,8 +3,6 @@ package pipeline
 import (
 	"fmt"
 	"log/slog"
-	"strconv"
-	"strings"
 
 	"magent/internal/config"
 	"magent/internal/metrics"
@@ -26,52 +24,42 @@ func buildNetflowWorkers(
 
 	out := make([]*metricWorker, 0, len(definitions))
 	for idx, definition := range definitions {
-		dropConditions, err := compileDropConditions(definition.DropEvent)
+		resolved, err := resolvePullWorkerRuntime(
+			logger,
+			"netflow",
+			idx,
+			"netflow",
+			definition.Name,
+			cfg.Metrics.Scrape.Duration,
+			definition.Scrape.Duration,
+			cfg.Metrics.Send.Duration,
+			definition.Send.Duration,
+			nil,
+			definition.Percentiles,
+			definition.DropEvent,
+		)
 		if err != nil {
 			return nil, fmt.Errorf("build netflow worker[%d]: %w", idx, err)
-		}
-
-		scrapeEvery := cfg.Metrics.Scrape.Duration
-		if scrapeEvery <= 0 {
-			scrapeEvery = defaultScrapeEvery
-		}
-		if definition.Scrape.Duration > 0 {
-			scrapeEvery = definition.Scrape.Duration
-		}
-
-		sendEvery := cfg.Metrics.Send.Duration
-		if sendEvery <= 0 {
-			sendEvery = defaultSendEvery
-		}
-		if definition.Send.Duration > 0 {
-			sendEvery = definition.Send.Duration
-		}
-
-		// Netflow defaults to last-only aggregation; worker-level percentiles can opt in explicitly.
-		percentiles := normalizePercentiles(nil, definition.Percentiles)
-
-		instance := strings.TrimSpace(definition.Name)
-		if instance == "" {
-			instance = "netflow-" + strconv.Itoa(idx)
 		}
 
 		worker, err := newMetricWorker(
 			WorkerConfig{
 				Metric:      "netflow",
-				Instance:    instance,
-				ScrapeEvery: scrapeEvery,
-				SendEvery:   sendEvery,
-				Percentiles: percentiles,
+				Instance:    resolved.instance,
+				ScrapeEvery: resolved.scrapeEvery,
+				SendEvery:   resolved.sendEvery,
+				Percentiles: resolved.percentiles,
 				Collector: metrics.NewNETFLOWCollector(
 					"netflow",
 					definition.Ifaces,
 					definition.TopN,
+					definition.FlowIdleTimeout.Duration,
 				),
 				Tags:      tags,
 				KeepKnown: false,
 				DropVar:   definition.DropVar,
 				FilterVar: definition.FilterVar,
-				DropEvent: dropConditions,
+				DropEvent: resolved.dropCondition,
 			},
 			sink,
 			logger,

@@ -21,6 +21,7 @@ const (
 	defaultHTTPTimeout     = 5 * time.Second
 	defaultHTTPMaxPending  = 4096
 	defaultNetflowTopN     = 20
+	defaultNetflowFlowIdle = 10 * time.Second
 	defaultDBHost          = "127.0.0.1"
 	defaultDBPort          = 8123
 	defaultDBName          = "metrics"
@@ -232,15 +233,16 @@ type HTTPClientWorkerConfig struct {
 // Params: schedule/filter options plus interface selection and top-N controls.
 // Returns: netflow worker runtime config.
 type NetflowWorkerConfig struct {
-	Name        string   `toml:"name"`
-	Scrape      Duration `toml:"scrape"`
-	Send        Duration `toml:"send"`
-	Percentiles []int    `toml:"percentiles"`
-	DropVar     []string `toml:"drop_var"`
-	FilterVar   []string `toml:"filter_var"`
-	DropEvent   []string `toml:"drop_event"`
-	Ifaces      []string `toml:"ifaces"`
-	TopN        uint32   `toml:"top_n"`
+	Name            string   `toml:"name"`
+	Scrape          Duration `toml:"scrape"`
+	Send            Duration `toml:"send"`
+	Percentiles     []int    `toml:"percentiles"`
+	DropVar         []string `toml:"drop_var"`
+	FilterVar       []string `toml:"filter_var"`
+	DropEvent       []string `toml:"drop_event"`
+	Ifaces          []string `toml:"ifaces"`
+	TopN            uint32   `toml:"top_n"`
+	FlowIdleTimeout Duration `toml:"flow_idle_timeout"`
 }
 
 // CollectorConfig defines collector target and delivery behavior.
@@ -358,18 +360,7 @@ func (c *Config) applyDefaults() error {
 	for scriptName := range c.Metrics.Script {
 		workers := c.Metrics.Script[scriptName]
 		for idx := range workers {
-			if workers[idx].Timeout.Duration == 0 {
-				workers[idx].Timeout.Duration = defaultScriptTimeout
-			}
-			if workers[idx].Env == nil {
-				workers[idx].Env = map[string]string{}
-			}
-			workers[idx].Format = lowerOrDefault(workers[idx].Format, "json")
-			if workers[idx].VarMode == "" {
-				workers[idx].VarMode = "full"
-			} else {
-				workers[idx].VarMode = strings.ToLower(strings.TrimSpace(workers[idx].VarMode))
-			}
+			applyScriptWorkerDefaults(&workers[idx])
 		}
 		c.Metrics.Script[scriptName] = workers
 	}
@@ -377,15 +368,7 @@ func (c *Config) applyDefaults() error {
 	for metricName := range c.Metrics.HTTPServer {
 		workers := c.Metrics.HTTPServer[metricName]
 		for idx := range workers {
-			if workers[idx].MaxPending == 0 {
-				workers[idx].MaxPending = defaultHTTPMaxPending
-			}
-			workers[idx].Format = lowerOrDefault(workers[idx].Format, "json")
-			if workers[idx].VarMode == "" {
-				workers[idx].VarMode = "full"
-			} else {
-				workers[idx].VarMode = strings.ToLower(strings.TrimSpace(workers[idx].VarMode))
-			}
+			applyHTTPServerWorkerDefaults(&workers[idx])
 		}
 		c.Metrics.HTTPServer[metricName] = workers
 	}
@@ -393,15 +376,7 @@ func (c *Config) applyDefaults() error {
 	for metricName := range c.Metrics.HTTPClient {
 		workers := c.Metrics.HTTPClient[metricName]
 		for idx := range workers {
-			if workers[idx].Timeout.Duration == 0 {
-				workers[idx].Timeout.Duration = defaultHTTPTimeout
-			}
-			workers[idx].Format = lowerOrDefault(workers[idx].Format, "json")
-			if workers[idx].VarMode == "" {
-				workers[idx].VarMode = "full"
-			} else {
-				workers[idx].VarMode = strings.ToLower(strings.TrimSpace(workers[idx].VarMode))
-			}
+			applyHTTPClientWorkerDefaults(&workers[idx])
 		}
 		c.Metrics.HTTPClient[metricName] = workers
 	}
@@ -409,6 +384,9 @@ func (c *Config) applyDefaults() error {
 	for idx := range c.Metrics.Netflow {
 		if c.Metrics.Netflow[idx].TopN == 0 {
 			c.Metrics.Netflow[idx].TopN = defaultNetflowTopN
+		}
+		if c.Metrics.Netflow[idx].FlowIdleTimeout.Duration <= 0 {
+			c.Metrics.Netflow[idx].FlowIdleTimeout.Duration = defaultNetflowFlowIdle
 		}
 	}
 
@@ -482,17 +460,14 @@ func (c *Config) validate() error {
 		}
 	}
 
-	for _, p := range c.Metrics.Percentiles {
-		if p <= 0 || p > 100 {
-			return fmt.Errorf("metrics.percentiles contains invalid value %d (must be 1..100)", p)
-		}
+	if err := validatePercentilesField("metrics.percentiles", c.Metrics.Percentiles); err != nil {
+		return err
 	}
-
-	if c.Metrics.Scrape.Duration < 0 {
-		return fmt.Errorf("metrics.scrape cannot be negative")
+	if err := validateNonNegativeDurationField("metrics.scrape", c.Metrics.Scrape.Duration); err != nil {
+		return err
 	}
-	if c.Metrics.Send.Duration < 0 {
-		return fmt.Errorf("metrics.send cannot be negative")
+	if err := validateNonNegativeDurationField("metrics.send", c.Metrics.Send.Duration); err != nil {
+		return err
 	}
 
 	if err := validateMetricWorkers("metrics.cpu", c.Metrics.CPU); err != nil {
@@ -585,24 +560,117 @@ func lowerOrDefault(value, fallback string) string {
 	return normalized
 }
 
+// normalizeExternalMetricFormatVarMode normalizes external source format and var-mode defaults.
+// Params: format and varMode raw config values.
+// Returns: normalized format and var-mode values.
+func normalizeExternalMetricFormatVarMode(format string, varMode string) (string, string) {
+	normalizedFormat := lowerOrDefault(format, "json")
+	normalizedVarMode := strings.ToLower(strings.TrimSpace(varMode))
+	if normalizedVarMode == "" {
+		normalizedVarMode = "full"
+	}
+	return normalizedFormat, normalizedVarMode
+}
+
+// applyScriptWorkerDefaults applies defaults shared by script workers.
+// Params: worker script worker config pointer.
+// Returns: none.
+func applyScriptWorkerDefaults(worker *ScriptWorkerConfig) {
+	if worker == nil {
+		return
+	}
+	if worker.Timeout.Duration == 0 {
+		worker.Timeout.Duration = defaultScriptTimeout
+	}
+	if worker.Env == nil {
+		worker.Env = map[string]string{}
+	}
+	worker.Format, worker.VarMode = normalizeExternalMetricFormatVarMode(worker.Format, worker.VarMode)
+}
+
+// applyHTTPServerWorkerDefaults applies defaults shared by http_server workers.
+// Params: worker http_server worker config pointer.
+// Returns: none.
+func applyHTTPServerWorkerDefaults(worker *HTTPServerWorkerConfig) {
+	if worker == nil {
+		return
+	}
+	if worker.MaxPending == 0 {
+		worker.MaxPending = defaultHTTPMaxPending
+	}
+	worker.Format, worker.VarMode = normalizeExternalMetricFormatVarMode(worker.Format, worker.VarMode)
+}
+
+// applyHTTPClientWorkerDefaults applies defaults shared by http_client workers.
+// Params: worker http_client worker config pointer.
+// Returns: none.
+func applyHTTPClientWorkerDefaults(worker *HTTPClientWorkerConfig) {
+	if worker == nil {
+		return
+	}
+	if worker.Timeout.Duration == 0 {
+		worker.Timeout.Duration = defaultHTTPTimeout
+	}
+	worker.Format, worker.VarMode = normalizeExternalMetricFormatVarMode(worker.Format, worker.VarMode)
+}
+
+// validateNonNegativeDurationField validates that duration is not negative.
+// Params: fieldPath full config field path; value duration value.
+// Returns: validation error or nil.
+func validateNonNegativeDurationField(fieldPath string, value time.Duration) error {
+	if value < 0 {
+		return fmt.Errorf("%s cannot be negative", fieldPath)
+	}
+	return nil
+}
+
+// validatePercentilesField validates percentile list values in range 1..100.
+// Params: fieldPath full config field path; values percentile list.
+// Returns: validation error or nil.
+func validatePercentilesField(fieldPath string, values []int) error {
+	for _, p := range values {
+		if p <= 0 || p > 100 {
+			return fmt.Errorf("%s contains invalid value %d (must be 1..100)", fieldPath, p)
+		}
+	}
+	return nil
+}
+
+// validateWorkerSchedulePercentiles validates schedule durations and percentile list.
+// Params: workerPath worker config path; scrape/send duration values; percentiles list; withScrape enables scrape check.
+// Returns: validation error or nil.
+func validateWorkerSchedulePercentiles(
+	workerPath string,
+	scrape time.Duration,
+	send time.Duration,
+	percentiles []int,
+	withScrape bool,
+) error {
+	if withScrape {
+		if err := validateNonNegativeDurationField(workerPath+".scrape", scrape); err != nil {
+			return err
+		}
+	}
+	if err := validateNonNegativeDurationField(workerPath+".send", send); err != nil {
+		return err
+	}
+	return validatePercentilesField(workerPath+".percentiles", percentiles)
+}
+
 // validateMetricWorkers validates worker override sections for one metric type.
 // Params: path is config path; workers are per-instance metric overrides.
 // Returns: validation error for invalid values.
 func validateMetricWorkers(path string, workers []MetricWorkerConfig) error {
 	for idx, worker := range workers {
 		workerPath := fmt.Sprintf("%s[%d]", path, idx)
-
-		if worker.Scrape.Duration < 0 {
-			return fmt.Errorf("%s.scrape cannot be negative", workerPath)
-		}
-		if worker.Send.Duration < 0 {
-			return fmt.Errorf("%s.send cannot be negative", workerPath)
-		}
-
-		for _, p := range worker.Percentiles {
-			if p <= 0 || p > 100 {
-				return fmt.Errorf("%s.percentiles contains invalid value %d (must be 1..100)", workerPath, p)
-			}
+		if err := validateWorkerSchedulePercentiles(
+			workerPath,
+			worker.Scrape.Duration,
+			worker.Send.Duration,
+			worker.Percentiles,
+			true,
+		); err != nil {
+			return err
 		}
 	}
 
@@ -615,18 +683,14 @@ func validateMetricWorkers(path string, workers []MetricWorkerConfig) error {
 func validateNetflowWorkers(path string, workers []NetflowWorkerConfig) error {
 	for idx, worker := range workers {
 		workerPath := fmt.Sprintf("%s[%d]", path, idx)
-
-		if worker.Scrape.Duration < 0 {
-			return fmt.Errorf("%s.scrape cannot be negative", workerPath)
-		}
-		if worker.Send.Duration < 0 {
-			return fmt.Errorf("%s.send cannot be negative", workerPath)
-		}
-
-		for _, p := range worker.Percentiles {
-			if p <= 0 || p > 100 {
-				return fmt.Errorf("%s.percentiles contains invalid value %d (must be 1..100)", workerPath, p)
-			}
+		if err := validateWorkerSchedulePercentiles(
+			workerPath,
+			worker.Scrape.Duration,
+			worker.Send.Duration,
+			worker.Percentiles,
+			true,
+		); err != nil {
+			return err
 		}
 
 		if len(worker.Ifaces) == 0 {
@@ -651,18 +715,14 @@ func validateNetflowWorkers(path string, workers []NetflowWorkerConfig) error {
 func validateProcessWorkers(path string, workers []ProcessWorkerConfig) error {
 	for idx, worker := range workers {
 		workerPath := fmt.Sprintf("%s[%d]", path, idx)
-
-		if worker.Scrape.Duration < 0 {
-			return fmt.Errorf("%s.scrape cannot be negative", workerPath)
-		}
-		if worker.Send.Duration < 0 {
-			return fmt.Errorf("%s.send cannot be negative", workerPath)
-		}
-
-		for _, p := range worker.Percentiles {
-			if p <= 0 || p > 100 {
-				return fmt.Errorf("%s.percentiles contains invalid value %d (must be 1..100)", workerPath, p)
-			}
+		if err := validateWorkerSchedulePercentiles(
+			workerPath,
+			worker.Scrape.Duration,
+			worker.Send.Duration,
+			worker.Percentiles,
+			true,
+		); err != nil {
+			return err
 		}
 
 		if worker.CPUUtil != nil {
@@ -697,12 +757,14 @@ func validateScriptWorkers(path string, workers map[string][]ScriptWorkerConfig)
 
 		for idx, worker := range definitions {
 			workerPath := fmt.Sprintf("%s.%s[%d]", path, scriptMetric, idx)
-
-			if worker.Scrape.Duration < 0 {
-				return fmt.Errorf("%s.scrape cannot be negative", workerPath)
-			}
-			if worker.Send.Duration < 0 {
-				return fmt.Errorf("%s.send cannot be negative", workerPath)
+			if err := validateWorkerSchedulePercentiles(
+				workerPath,
+				worker.Scrape.Duration,
+				worker.Send.Duration,
+				worker.Percentiles,
+				true,
+			); err != nil {
+				return err
 			}
 			if worker.Timeout.Duration <= 0 {
 				return fmt.Errorf("%s.timeout must be > 0", workerPath)
@@ -712,12 +774,6 @@ func validateScriptWorkers(path string, workers map[string][]ScriptWorkerConfig)
 			}
 			if err := validateExternalMetricFormat(workerPath, worker.Format, worker.Include, worker.VarMode); err != nil {
 				return err
-			}
-
-			for _, p := range worker.Percentiles {
-				if p <= 0 || p > 100 {
-					return fmt.Errorf("%s.percentiles contains invalid value %d (must be 1..100)", workerPath, p)
-				}
 			}
 
 			for envKey := range worker.Env {
@@ -743,15 +799,14 @@ func validateHTTPServerWorkers(path string, workers map[string][]HTTPServerWorke
 
 		for idx, worker := range definitions {
 			workerPath := fmt.Sprintf("%s.%s[%d]", path, metric, idx)
-
-			if worker.Send.Duration < 0 {
-				return fmt.Errorf("%s.send cannot be negative", workerPath)
-			}
-
-			for _, p := range worker.Percentiles {
-				if p <= 0 || p > 100 {
-					return fmt.Errorf("%s.percentiles contains invalid value %d (must be 1..100)", workerPath, p)
-				}
+			if err := validateWorkerSchedulePercentiles(
+				workerPath,
+				0,
+				worker.Send.Duration,
+				worker.Percentiles,
+				false,
+			); err != nil {
+				return err
 			}
 
 			if strings.TrimSpace(worker.Listen) == "" {
@@ -792,12 +847,14 @@ func validateHTTPClientWorkers(path string, workers map[string][]HTTPClientWorke
 
 		for idx, worker := range definitions {
 			workerPath := fmt.Sprintf("%s.%s[%d]", path, metric, idx)
-
-			if worker.Scrape.Duration < 0 {
-				return fmt.Errorf("%s.scrape cannot be negative", workerPath)
-			}
-			if worker.Send.Duration < 0 {
-				return fmt.Errorf("%s.send cannot be negative", workerPath)
+			if err := validateWorkerSchedulePercentiles(
+				workerPath,
+				worker.Scrape.Duration,
+				worker.Send.Duration,
+				worker.Percentiles,
+				true,
+			); err != nil {
+				return err
 			}
 			if worker.Timeout.Duration <= 0 {
 				return fmt.Errorf("%s.timeout must be > 0", workerPath)
@@ -811,12 +868,6 @@ func validateHTTPClientWorkers(path string, workers map[string][]HTTPClientWorke
 			for labelIdx, labelName := range worker.KeyFromLabels {
 				if strings.TrimSpace(labelName) == "" {
 					return fmt.Errorf("%s.key_from_labels[%d] cannot be empty", workerPath, labelIdx)
-				}
-			}
-
-			for _, p := range worker.Percentiles {
-				if p <= 0 || p > 100 {
-					return fmt.Errorf("%s.percentiles contains invalid value %d (must be 1..100)", workerPath, p)
 				}
 			}
 		}

@@ -104,6 +104,42 @@ func TestBuildScriptWorkers(t *testing.T) {
 	}
 }
 
+// TestBuildScriptWorkers_LastOnlyAlignsScrapeToSend verifies scrape=send alignment when percentiles are disabled.
+// Params: testing.T for assertions.
+// Returns: none.
+func TestBuildScriptWorkers_LastOnlyAlignsScrapeToSend(t *testing.T) {
+	cfg := &config.Config{
+		Metrics: config.MetricsConfig{
+			Scrape: config.Duration{Duration: 5 * time.Second},
+			Send:   config.Duration{Duration: 30 * time.Second},
+			Script: map[string][]config.ScriptWorkerConfig{
+				"db": {
+					{
+						Path:    "./scripts/db.sh",
+						Timeout: config.Duration{Duration: 5 * time.Second},
+					},
+				},
+			},
+		},
+	}
+
+	workers, err := buildScriptWorkers(
+		cfg,
+		EventTags{DC: "dc1", Host: "host1", Project: "infra", Role: "db"},
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		noopSink{},
+	)
+	if err != nil {
+		t.Fatalf("buildScriptWorkers: %v", err)
+	}
+	if len(workers) != 1 {
+		t.Fatalf("unexpected worker count: %d", len(workers))
+	}
+	if got := workers[0].cfg.ScrapeEvery; got != 30*time.Second {
+		t.Fatalf("unexpected aligned scrape interval: %v", got)
+	}
+}
+
 // TestBuildProcessWorkers_DefaultScrapeEvery20s verifies process-specific default scrape interval.
 // Params: testing.T for assertions.
 // Returns: none.
@@ -177,6 +213,41 @@ func TestBuildProcessWorkers_UsesExplicitScrapeOverride(t *testing.T) {
 	}
 }
 
+// TestBuildProcessWorkers_LastOnlyAlignsScrapeToSend verifies process scrape alignment when percentiles are disabled.
+// Params: testing.T for assertions.
+// Returns: none.
+func TestBuildProcessWorkers_LastOnlyAlignsScrapeToSend(t *testing.T) {
+	cpu := 1.0
+	cfg := &config.Config{
+		Metrics: config.MetricsConfig{
+			Scrape: config.Duration{Duration: 5 * time.Second},
+			Send:   config.Duration{Duration: 30 * time.Second},
+			Process: []config.ProcessWorkerConfig{
+				{
+					Name:    "process-last-only",
+					CPUUtil: &cpu,
+				},
+			},
+		},
+	}
+
+	workers, err := buildProcessWorkers(
+		cfg,
+		EventTags{DC: "dc1", Host: "host1", Project: "infra", Role: "db"},
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		noopSink{},
+	)
+	if err != nil {
+		t.Fatalf("buildProcessWorkers: %v", err)
+	}
+	if len(workers) != 1 {
+		t.Fatalf("unexpected worker count: %d", len(workers))
+	}
+	if got := workers[0].cfg.ScrapeEvery; got != 30*time.Second {
+		t.Fatalf("unexpected aligned process scrape interval: %v", got)
+	}
+}
+
 // TestBuildNetflowWorkers verifies netflow worker defaults and last-only percentile mode.
 // Params: testing.T for assertions.
 // Returns: none.
@@ -218,8 +289,78 @@ func TestBuildNetflowWorkers(t *testing.T) {
 	if workers[0].cfg.Percentiles != nil {
 		t.Fatalf("expected netflow default last-only mode")
 	}
+	if got := workers[0].cfg.ScrapeEvery; got != 30*time.Second {
+		t.Fatalf("unexpected aligned netflow scrape interval: %v", got)
+	}
 	if _, ok := workers[0].cfg.Collector.(*metrics.NETFLOWCollector); !ok {
 		t.Fatalf("expected netflow worker to use NETFLOWCollector, got %T", workers[0].cfg.Collector)
+	}
+}
+
+// TestBuildNetflowWorkers_LastOnlyForceScrapeSend verifies worker-level scrape override is aligned to send in last-only mode.
+// Params: testing.T for assertions.
+// Returns: none.
+func TestBuildNetflowWorkers_LastOnlyForceScrapeSend(t *testing.T) {
+	cfg := &config.Config{
+		Metrics: config.MetricsConfig{
+			Scrape: config.Duration{Duration: 5 * time.Second},
+			Send:   config.Duration{Duration: 30 * time.Second},
+			Netflow: []config.NetflowWorkerConfig{
+				{
+					Ifaces: []string{"lo"},
+					TopN:   20,
+					Scrape: config.Duration{Duration: 1 * time.Second},
+					Send:   config.Duration{Duration: 4 * time.Second},
+				},
+			},
+		},
+	}
+
+	workers, err := buildNetflowWorkers(
+		cfg,
+		EventTags{DC: "dc1", Host: "host1", Project: "infra", Role: "db"},
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		noopSink{},
+	)
+	if err != nil {
+		t.Fatalf("buildNetflowWorkers: %v", err)
+	}
+	if len(workers) != 1 {
+		t.Fatalf("unexpected worker count: %d", len(workers))
+	}
+	if got := workers[0].cfg.ScrapeEvery; got != 4*time.Second {
+		t.Fatalf("expected aligned scrape=send=4s, got %v", got)
+	}
+}
+
+// TestBuildWorkersForMetric_LastOnlyAlignsScrapeToSend verifies generic pull worker scrape alignment in last-only mode.
+// Params: testing.T for assertions.
+// Returns: none.
+func TestBuildWorkersForMetric_LastOnlyAlignsScrapeToSend(t *testing.T) {
+	workers, err := buildWorkersForMetric(
+		"cpu",
+		[]config.MetricWorkerConfig{
+			{Name: "cpu-last-only", Scrape: config.Duration{Duration: 7 * time.Second}},
+		},
+		config.MetricsConfig{
+			Scrape: config.Duration{Duration: 5 * time.Second},
+			Send:   config.Duration{Duration: 30 * time.Second},
+		},
+		EventTags{DC: "dc1", Host: "host1", Project: "infra", Role: "db"},
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		noopSink{},
+		func(_ config.MetricWorkerConfig) metrics.Collector {
+			return metrics.NewCPUCollector("cpu")
+		},
+	)
+	if err != nil {
+		t.Fatalf("buildWorkersForMetric: %v", err)
+	}
+	if len(workers) != 1 {
+		t.Fatalf("unexpected worker count: %d", len(workers))
+	}
+	if got := workers[0].cfg.ScrapeEvery; got != 30*time.Second {
+		t.Fatalf("unexpected aligned scrape interval: %v", got)
 	}
 }
 

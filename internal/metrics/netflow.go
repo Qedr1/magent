@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"magent/internal/match"
 
@@ -31,6 +32,7 @@ const (
 	ipProtocolUDP = 17
 
 	netflowCounterShards = 64
+	defaultFlowIdleTTL   = 10 * time.Second
 )
 
 type flowTuple struct {
@@ -49,11 +51,13 @@ type flowTuple struct {
 type flowCounter struct {
 	bytes   uint64
 	packets uint64
+	flows   uint64
 }
 
 type flowCounterShard struct {
 	mu       sync.Mutex
 	counters map[flowTuple]flowCounter
+	udpSeen  map[flowTuple]int64
 }
 
 type packetSource struct {
@@ -68,6 +72,7 @@ type NETFLOWCollector struct {
 	metricName string
 	ifaceMasks []string
 	topN       int
+	flowIdle   time.Duration
 
 	mu      sync.Mutex
 	started bool
@@ -79,7 +84,7 @@ type NETFLOWCollector struct {
 // NewNETFLOWCollector creates a built-in netflow collector.
 // Params: metricName emitted into event.metric, ifaceMasks wildcard interface selectors, topN emitted flow limit.
 // Returns: NETFLOW collector instance.
-func NewNETFLOWCollector(metricName string, ifaceMasks []string, topN uint32) *NETFLOWCollector {
+func NewNETFLOWCollector(metricName string, ifaceMasks []string, topN uint32, flowIdleTimeout time.Duration) *NETFLOWCollector {
 	masks := make([]string, 0, len(ifaceMasks))
 	for _, pattern := range ifaceMasks {
 		trimmed := strings.TrimSpace(pattern)
@@ -93,16 +98,21 @@ func NewNETFLOWCollector(metricName string, ifaceMasks []string, topN uint32) *N
 	if limit <= 0 {
 		limit = 20
 	}
+	if flowIdleTimeout <= 0 {
+		flowIdleTimeout = defaultFlowIdleTTL
+	}
 
 	shards := make([]flowCounterShard, netflowCounterShards)
 	for idx := range shards {
 		shards[idx].counters = make(map[flowTuple]flowCounter, 64)
+		shards[idx].udpSeen = make(map[flowTuple]int64, 64)
 	}
 
 	return &NETFLOWCollector{
 		metricName: strings.TrimSpace(metricName),
 		ifaceMasks: masks,
 		topN:       limit,
+		flowIdle:   flowIdleTimeout,
 		sources:    make(map[string]*packetSource),
 		shards:     shards,
 	}
@@ -220,19 +230,17 @@ func (c *NETFLOWCollector) captureLoop(source *packetSource) {
 			continue
 		}
 
-			tuple, packetBytes, ok := parseFlowTuple(source.iface, buffer[:n])
-			if !ok {
-				continue
-			}
-
-			shard := c.counterShard(tuple)
-			shard.mu.Lock()
-			counter := shard.counters[tuple]
-			counter.bytes += packetBytes
-			counter.packets++
-			shard.counters[tuple] = counter
-			shard.mu.Unlock()
+		parsed, ok := parseFlowTuple(source.iface, buffer[:n])
+		if !ok {
+			continue
 		}
+
+		now := time.Now().UnixNano()
+		shard := c.counterShard(parsed.tuple)
+		shard.mu.Lock()
+		c.updateCounter(shard, parsed, now)
+		shard.mu.Unlock()
+	}
 }
 
 // stop closes all packet sockets and marks collector as stopped.
@@ -258,10 +266,16 @@ func (c *NETFLOWCollector) stop() {
 // Returns: snapshot of counters since previous scrape.
 func (c *NETFLOWCollector) swapCounters() map[flowTuple]flowCounter {
 	snapshot := make(map[flowTuple]flowCounter)
+	idleCutoff := time.Now().Add(-c.flowIdle).UnixNano()
 	for idx := range c.shards {
 		shard := &c.shards[idx]
 
 		shard.mu.Lock()
+		for tuple, seenAt := range shard.udpSeen {
+			if seenAt < idleCutoff {
+				delete(shard.udpSeen, tuple)
+			}
+		}
 		if len(shard.counters) == 0 {
 			shard.mu.Unlock()
 			continue
@@ -275,6 +289,30 @@ func (c *NETFLOWCollector) swapCounters() map[flowTuple]flowCounter {
 	}
 
 	return snapshot
+}
+
+// updateCounter updates one shard counter with packet and flow-start semantics.
+// Params: shard target shard; parsed packet tuple/size/flags; observedAt is packet receive time in unix nanos.
+// Returns: none.
+func (c *NETFLOWCollector) updateCounter(shard *flowCounterShard, parsed parsedFlow, observedAt int64) {
+	counter := shard.counters[parsed.tuple]
+	counter.bytes += parsed.packetBytes
+	counter.packets++
+
+	switch parsed.tuple.proto {
+	case ipProtocolTCP:
+		if parsed.tcpStart {
+			counter.flows++
+		}
+	case ipProtocolUDP:
+		lastSeen, exists := shard.udpSeen[parsed.tuple]
+		if !exists || observedAt-lastSeen >= c.flowIdle.Nanoseconds() {
+			counter.flows++
+		}
+		shard.udpSeen[parsed.tuple] = observedAt
+	}
+
+	shard.counters[parsed.tuple] = counter
 }
 
 // counterShard resolves counter shard for tuple updates.
@@ -403,13 +441,22 @@ func htons(value uint16) uint16 {
 	return (value<<8)&0xff00 | value>>8
 }
 
+// parsedFlow is one parsed packet with tuple identity, packet size and flow-start hint.
+// Params: none.
+// Returns: parsed packet fields.
+type parsedFlow struct {
+	tuple       flowTuple
+	packetBytes uint64
+	tcpStart    bool
+}
+
 // parseFlowTuple parses one Ethernet frame and extracts TCP/UDP flow tuple.
 // Params: iface source interface name, frame raw Ethernet bytes.
-// Returns: tuple, packet bytes, and parse success flag.
-func parseFlowTuple(iface string, frame []byte) (flowTuple, uint64, bool) {
+// Returns: parsed flow and parse success flag.
+func parseFlowTuple(iface string, frame []byte) (parsedFlow, bool) {
 	etherType, payload, ok := parseEthernet(frame)
 	if !ok {
-		return flowTuple{}, 0, false
+		return parsedFlow{}, false
 	}
 
 	switch etherType {
@@ -418,7 +465,7 @@ func parseFlowTuple(iface string, frame []byte) (flowTuple, uint64, bool) {
 	case etherTypeIPv6:
 		return parseIPv6Tuple(iface, payload)
 	default:
-		return flowTuple{}, 0, false
+		return parsedFlow{}, false
 	}
 }
 
@@ -450,24 +497,24 @@ func parseEthernet(frame []byte) (uint16, []byte, bool) {
 // parseIPv4Tuple parses IPv4 packet into TCP/UDP tuple.
 // Params: iface source interface name; packet IPv4 bytes.
 // Returns: tuple, packet bytes, and parse success flag.
-func parseIPv4Tuple(iface string, packet []byte) (flowTuple, uint64, bool) {
+func parseIPv4Tuple(iface string, packet []byte) (parsedFlow, bool) {
 	if len(packet) < 20 {
-		return flowTuple{}, 0, false
+		return parsedFlow{}, false
 	}
 
 	version := packet[0] >> 4
 	if version != 4 {
-		return flowTuple{}, 0, false
+		return parsedFlow{}, false
 	}
 
 	ihl := int(packet[0]&0x0f) * 4
 	if ihl < 20 || len(packet) < ihl {
-		return flowTuple{}, 0, false
+		return parsedFlow{}, false
 	}
 
 	totalLength := int(binary.BigEndian.Uint16(packet[2:4]))
 	if totalLength < ihl {
-		return flowTuple{}, 0, false
+		return parsedFlow{}, false
 	}
 	if totalLength > len(packet) {
 		totalLength = len(packet)
@@ -475,16 +522,16 @@ func parseIPv4Tuple(iface string, packet []byte) (flowTuple, uint64, bool) {
 
 	flagsOffset := binary.BigEndian.Uint16(packet[6:8])
 	if flagsOffset&0x1fff != 0 {
-		return flowTuple{}, 0, false
+		return parsedFlow{}, false
 	}
 
 	proto := packet[9]
 	if proto != ipProtocolTCP && proto != ipProtocolUDP {
-		return flowTuple{}, 0, false
+		return parsedFlow{}, false
 	}
 
 	if len(packet) < ihl+4 {
-		return flowTuple{}, 0, false
+		return parsedFlow{}, false
 	}
 
 	tuple := flowTuple{
@@ -498,20 +545,33 @@ func parseIPv4Tuple(iface string, packet []byte) (flowTuple, uint64, bool) {
 	copy(tuple.srcAddr[12:16], packet[12:16])
 	copy(tuple.dstAddr[12:16], packet[16:20])
 
-	return tuple, uint64(totalLength), true
+	tcpStart := false
+	if proto == ipProtocolTCP {
+		if len(packet) < ihl+20 {
+			return parsedFlow{}, false
+		}
+		flags := packet[ihl+13]
+		tcpStart = flags&0x02 != 0 && flags&0x10 == 0
+	}
+
+	return parsedFlow{
+		tuple:       tuple,
+		packetBytes: uint64(totalLength),
+		tcpStart:    tcpStart,
+	}, true
 }
 
 // parseIPv6Tuple parses IPv6 packet into TCP/UDP tuple.
 // Params: iface source interface name; packet IPv6 bytes.
 // Returns: tuple, packet bytes, and parse success flag.
-func parseIPv6Tuple(iface string, packet []byte) (flowTuple, uint64, bool) {
+func parseIPv6Tuple(iface string, packet []byte) (parsedFlow, bool) {
 	if len(packet) < 40 {
-		return flowTuple{}, 0, false
+		return parsedFlow{}, false
 	}
 
 	version := packet[0] >> 4
 	if version != 6 {
-		return flowTuple{}, 0, false
+		return parsedFlow{}, false
 	}
 
 	payloadLength := int(binary.BigEndian.Uint16(packet[4:6]))
@@ -527,45 +587,45 @@ func parseIPv6Tuple(iface string, packet []byte) (flowTuple, uint64, bool) {
 		switch nextHeader {
 		case 0, 43, 60:
 			if len(packet) < offset+2 {
-				return flowTuple{}, 0, false
+				return parsedFlow{}, false
 			}
 			headerLength := (int(packet[offset+1]) + 1) * 8
 			nextHeader = packet[offset]
 			offset += headerLength
 		case 44:
 			if len(packet) < offset+8 {
-				return flowTuple{}, 0, false
+				return parsedFlow{}, false
 			}
 			fragmentOffset := (binary.BigEndian.Uint16(packet[offset+2:offset+4]) >> 3) & 0x1fff
 			nextHeader = packet[offset]
 			offset += 8
 			if fragmentOffset != 0 {
-				return flowTuple{}, 0, false
+				return parsedFlow{}, false
 			}
 		case 51:
 			if len(packet) < offset+2 {
-				return flowTuple{}, 0, false
+				return parsedFlow{}, false
 			}
 			headerLength := (int(packet[offset+1]) + 2) * 4
 			nextHeader = packet[offset]
 			offset += headerLength
 		case 50:
-			return flowTuple{}, 0, false
+			return parsedFlow{}, false
 		default:
 			goto transport
 		}
 
 		if len(packet) < offset {
-			return flowTuple{}, 0, false
+			return parsedFlow{}, false
 		}
 	}
 
 transport:
 	if nextHeader != ipProtocolTCP && nextHeader != ipProtocolUDP {
-		return flowTuple{}, 0, false
+		return parsedFlow{}, false
 	}
 	if len(packet) < offset+4 {
-		return flowTuple{}, 0, false
+		return parsedFlow{}, false
 	}
 
 	tuple := flowTuple{
@@ -577,7 +637,20 @@ transport:
 	copy(tuple.srcAddr[:], packet[8:24])
 	copy(tuple.dstAddr[:], packet[24:40])
 
-	return tuple, uint64(totalLength), true
+	tcpStart := false
+	if nextHeader == ipProtocolTCP {
+		if len(packet) < offset+20 {
+			return parsedFlow{}, false
+		}
+		flags := packet[offset+13]
+		tcpStart = flags&0x02 != 0 && flags&0x10 == 0
+	}
+
+	return parsedFlow{
+		tuple:       tuple,
+		packetBytes: uint64(totalLength),
+		tcpStart:    tcpStart,
+	}, true
 }
 
 type flowRow struct {
@@ -717,7 +790,7 @@ func buildFlowPoints(counters map[flowTuple]flowCounter, topN int) []Point {
 			Values: map[string]Value{
 				"bytes":   {Raw: float64(row.counter.bytes), Kind: KindNumber},
 				"packets": {Raw: float64(row.counter.packets), Kind: KindNumber},
-				"flows":   {Raw: 1, Kind: KindNumber},
+				"flows":   {Raw: float64(row.counter.flows), Kind: KindNumber},
 			},
 		})
 	}
