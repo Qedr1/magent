@@ -250,7 +250,6 @@ max_events = 100
 [[metrics.script.demo]]
 path = "./scripts/db.sh"
 format = "prometheus"
-include = ["app_jobs"]
 var_mode = "short"
 `)
 
@@ -334,8 +333,6 @@ max_events = 100
 [[metrics.http_client.vector]]
 url = "http://127.0.0.1:19598/metrics"
 format = "prometheus"
-include = ["vector_build_info","vector_component_received_bytes_total"]
-key_from_labels = ["host","component_id"]
 var_mode = "short"
 `)
 
@@ -354,18 +351,12 @@ var_mode = "short"
 	if got := workers[0].VarMode; got != "short" {
 		t.Fatalf("unexpected http-client var_mode: %q", got)
 	}
-	if got := workers[0].Include; len(got) != 2 || got[0] != "vector_build_info" || got[1] != "vector_component_received_bytes_total" {
-		t.Fatalf("unexpected include: %#v", got)
-	}
-	if got := workers[0].KeyFromLabels; len(got) != 2 || got[0] != "host" || got[1] != "component_id" {
-		t.Fatalf("unexpected key_from_labels: %#v", got)
-	}
 }
 
-// TestLoad_RejectsHTTPClientPrometheusWithoutInclude verifies include validation for prometheus mode.
+// TestLoad_AcceptsHTTPClientPrometheusWithoutExtraSelectors verifies prometheus mode works with default selectors.
 // Params: testing.T for assertions.
 // Returns: none.
-func TestLoad_RejectsHTTPClientPrometheusWithoutInclude(t *testing.T) {
+func TestLoad_AcceptsHTTPClientPrometheusWithoutExtraSelectors(t *testing.T) {
 	path := writeConfig(t, `
 [global]
 dc = "dc1"
@@ -384,8 +375,8 @@ format = "prometheus"
 `)
 
 	_, err := config.Load(path)
-	if err == nil {
-		t.Fatalf("expected validation error for missing http_client.include in prometheus mode")
+	if err != nil {
+		t.Fatalf("expected config to load with prometheus defaults: %v", err)
 	}
 }
 
@@ -435,7 +426,6 @@ max_events = 100
 [[metrics.http_client.vector]]
 url = "http://127.0.0.1:19598/metrics"
 format = "prometheus"
-include = ["vector_build_info"]
 var_mode = "bad"
 `)
 
@@ -509,7 +499,6 @@ max_events = 100
 listen = "127.0.0.1:18081"
 path = "/metrics"
 format = "prometheus"
-include = ["app_jobs"]
 var_mode = "short"
 `)
 

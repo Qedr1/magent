@@ -20,13 +20,13 @@ Flow:
   `[[metrics.http_client.vector_internal]]` -> table `vector_internal`.
 - For Prometheus mode use:
   - `format = "prometheus"`
-  - `include = [ ... ]` (explicit metric allow-list)
-  - `key_from_labels = [ ... ]` (build stable key from labels)
+  - `filter_var = [ ... ]` (explicit metric allow-list by variable names)
   - `percentiles = []` (recommended: last-only for counters/gauges)
 
 ## Rule Processing Metrics
-To monitor VRL/transform processing, query rows where key contains:
-- `component_id=flatten_rows`
+In Prometheus mode key is fixed (`total`), so query by variable names:
+- `vector_component_received_events_total`
+- `vector_component_sent_events_total`
 
 Typical vars:
 - `vector_component_received_events_total`
@@ -39,11 +39,10 @@ Typical vars:
 Example query:
 ```sql
 SELECT
-  key,
   var,
   agg,
   value
 FROM metrics.vector_internal
-WHERE key LIKE '%component_id=flatten_rows%'
+WHERE var IN ('vector_component_received_events_total','vector_component_sent_events_total')
 ORDER BY dt DESC, var;
 ```

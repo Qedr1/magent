@@ -399,12 +399,11 @@ func buildScriptWorkers(
 						definition.Env,
 						metrics.HTTPClientCollectorOptions{
 							Format:  definition.Format,
-							Include: definition.Include,
 							VarMode: definition.VarMode,
 						},
 					),
 					Tags:      tags,
-					KeepKnown: true,
+					KeepKnown: false,
 					DropVar:   definition.DropVar,
 					FilterVar: definition.FilterVar,
 					DropEvent: resolved.dropCondition,

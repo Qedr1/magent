@@ -69,14 +69,12 @@ func buildHTTPClientWorkers(
 						resolvedURL,
 						definition.Timeout.Duration,
 						metrics.HTTPClientCollectorOptions{
-							Format:        definition.Format,
-							Include:       definition.Include,
-							KeyFromLabels: definition.KeyFromLabels,
-							VarMode:       definition.VarMode,
+							Format:  definition.Format,
+							VarMode: definition.VarMode,
 						},
 					),
 					Tags:      tags,
-					KeepKnown: true,
+					KeepKnown: false,
 					DropVar:   definition.DropVar,
 					FilterVar: definition.FilterVar,
 					DropEvent: resolved.dropCondition,
@@ -205,7 +203,6 @@ func buildHTTPServerRunners(
 				metric,
 				resolved.instance,
 				definition.Format,
-				definition.Include,
 				definition.VarMode,
 				logger,
 			))
@@ -223,7 +220,6 @@ func makeHTTPIngestHandler(
 	metric string,
 	instance string,
 	format string,
-	include []string,
 	varMode string,
 	logger *slog.Logger,
 ) http.HandlerFunc {
@@ -232,7 +228,6 @@ func makeHTTPIngestHandler(
 		format = "json"
 	}
 	promCfg := metrics.PrometheusParseConfig{
-		Include: include,
 		VarMode: varMode,
 	}
 

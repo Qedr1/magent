@@ -27,8 +27,8 @@ name = "vector-internal-prom"
 url = "http://127.0.0.1:19598/metrics"
 format = "prometheus"
 
-# Include all needed metrics explicitly.
-include = [
+# Keep only selected metrics via standard filter_var.
+filter_var = [
   "vector_component_received_events_total",
   "vector_component_sent_events_total",
   "vector_component_received_event_bytes_total",
@@ -42,20 +42,6 @@ include = [
   "vector_utilization",
   "vector_started_total",
   "vector_build_info"
-]
-
-# Key is generated from selected labels in this exact order.
-key_from_labels = [
-  "host",
-  "component_id",
-  "component_kind",
-  "component_type",
-  "buffer_id",
-  "buffer_type",
-  "protocol",
-  "status",
-  "stage",
-  "le"
 ]
 
 var_mode = "full"

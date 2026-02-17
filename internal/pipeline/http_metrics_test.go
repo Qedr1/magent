@@ -91,4 +91,7 @@ func TestBuildHTTPClientWorkers_LastOnlyAlignsScrapeToSend(t *testing.T) {
 	if got := workers[0].cfg.ScrapeEvery; got != 30*time.Second {
 		t.Fatalf("unexpected aligned scrape interval: %v", got)
 	}
+	if workers[0].cfg.KeepKnown {
+		t.Fatalf("expected keep_known=false for http_client workers")
+	}
 }

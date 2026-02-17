@@ -118,14 +118,13 @@ ram_util = 5
 #
 # # Vector monitoring via Prometheus exporter:
 # # 1) Vector must expose internal metrics on /metrics via internal_metrics + prometheus_exporter sink.
-# # 2) include selects exact metric names to ingest.
-# # 3) key_from_labels defines event key from labels in declared order.
+# # 2) prometheus key is fixed: total (labels are ignored).
+# # 3) metric allow-list is done via filter_var/drop_var/drop_event.
 # [[metrics.http_client.vector_monitor]]
 # name = "vector-monitor"
 # url = "http://127.0.0.1:19598/metrics"
 # format = "prometheus"
-# include = ["vector_build_info", "vector_api_started_total"]
-# key_from_labels = ["host"]
+# filter_var = ["vector_build_info", "vector_api_started_total"]
 # var_mode = "full"   # full|short
 # scrape = "5s"
 # send = "30s"

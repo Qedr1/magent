@@ -17,9 +17,7 @@ func TestParsePointsPrometheus_MatchingMetricsAndTypes(t *testing.T) {
 	}, "\n")
 
 	points, err := ParsePointsPrometheus(payload, PrometheusParseConfig{
-		Include:       []string{"vector_build_info", "vector_component_received_bytes_total"},
-		KeyFromLabels: []string{"host", "component_id"},
-		VarMode:       PrometheusVarModeFull,
+		VarMode: PrometheusVarModeFull,
 	})
 	if err != nil {
 		t.Fatalf("ParsePointsPrometheus() error: %v", err)
@@ -40,9 +38,7 @@ func TestParsePointsPrometheus_VarModeShort(t *testing.T) {
 	}, "\n")
 
 	points, err := ParsePointsPrometheus(payload, PrometheusParseConfig{
-		Include:       []string{"vector_buffer_byte_size"},
-		KeyFromLabels: []string{"host", "component_id"},
-		VarMode:       PrometheusVarModeShort,
+		VarMode: PrometheusVarModeShort,
 	})
 	if err != nil {
 		t.Fatalf("ParsePointsPrometheus() error: %v", err)
@@ -57,14 +53,12 @@ func TestParsePointsPrometheus_VarModeShort(t *testing.T) {
 
 func TestParsePointsPrometheus_NoMatches(t *testing.T) {
 	payload := strings.Join([]string{
-		`# TYPE vector_build_info gauge`,
-		`vector_build_info{host="dev"} 1`,
+		`# TYPE vector_buffer_send_duration_seconds histogram`,
+		`vector_buffer_send_duration_seconds_bucket{host="dev",le="+Inf"} 5`,
 	}, "\n")
 
 	_, err := ParsePointsPrometheus(payload, PrometheusParseConfig{
-		Include:       []string{"vector_nonexistent_metric"},
-		KeyFromLabels: []string{"host"},
-		VarMode:       PrometheusVarModeFull,
+		VarMode: PrometheusVarModeFull,
 	})
 	if err == nil {
 		t.Fatalf("expected error for missing matching samples")
@@ -78,9 +72,7 @@ func TestParsePointsPrometheus_LabelValueWithSpaces(t *testing.T) {
 	}, "\n")
 
 	points, err := ParsePointsPrometheus(payload, PrometheusParseConfig{
-		Include:       []string{"vector_build_info"},
-		KeyFromLabels: []string{"host"},
-		VarMode:       PrometheusVarModeFull,
+		VarMode: PrometheusVarModeFull,
 	})
 	if err != nil {
 		t.Fatalf("ParsePointsPrometheus() error: %v", err)

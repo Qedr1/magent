@@ -24,10 +24,8 @@ type HTTPClientCollector struct {
 // Params: format selects parser mode; prometheus fields apply when format=prometheus.
 // Returns: collector runtime options.
 type HTTPClientCollectorOptions struct {
-	Format        string
-	Include       []string
-	KeyFromLabels []string
-	VarMode       string
+	Format  string
+	VarMode string
 }
 
 // NewHTTPClientCollector creates an HTTP client collector.
@@ -39,20 +37,6 @@ func NewHTTPClientCollector(metricName string, url string, timeout time.Duration
 		format = "json"
 	}
 
-	include := make([]string, 0, len(options.Include))
-	for _, metricName := range options.Include {
-		trimmed := strings.TrimSpace(metricName)
-		if trimmed != "" {
-			include = append(include, trimmed)
-		}
-	}
-	keyFromLabels := make([]string, 0, len(options.KeyFromLabels))
-	for _, labelName := range options.KeyFromLabels {
-		trimmed := strings.TrimSpace(labelName)
-		if trimmed != "" {
-			keyFromLabels = append(keyFromLabels, trimmed)
-		}
-	}
 	varMode := strings.ToLower(strings.TrimSpace(options.VarMode))
 	if varMode == "" {
 		varMode = PrometheusVarModeFull
@@ -64,11 +48,9 @@ func NewHTTPClientCollector(metricName string, url string, timeout time.Duration
 		client: &http.Client{
 			Timeout: timeout,
 		},
-		format:     format,
+		format: format,
 		prometheus: NewPrometheusParser(PrometheusParseConfig{
-			Include:       include,
-			KeyFromLabels: keyFromLabels,
-			VarMode:       varMode,
+			VarMode: varMode,
 		}),
 	}
 }

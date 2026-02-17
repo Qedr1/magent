@@ -60,10 +60,8 @@ func TestHTTPClientCollectorScrapePrometheus(t *testing.T) {
 		server.URL,
 		time.Second,
 		HTTPClientCollectorOptions{
-			Format:        "prometheus",
-			Include:       []string{"vector_build_info", "vector_component_received_bytes_total"},
-			KeyFromLabels: []string{"host", "component_id"},
-			VarMode:       PrometheusVarModeFull,
+			Format:  "prometheus",
+			VarMode: PrometheusVarModeFull,
 		},
 	)
 

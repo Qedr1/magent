@@ -12,6 +12,43 @@ import (
 	"time"
 )
 
+type cappedBuffer struct {
+	buffer bytes.Buffer
+	max    int
+}
+
+// Write appends data up to configured cap and silently drops the rest.
+// Params: payload chunk bytes.
+// Returns: consumed input size to keep writer contract for command pipes.
+func (b *cappedBuffer) Write(payload []byte) (int, error) {
+	if b.max <= 0 || b.buffer.Len() >= b.max {
+		return len(payload), nil
+	}
+
+	remaining := b.max - b.buffer.Len()
+	if len(payload) > remaining {
+		_, _ = b.buffer.Write(payload[:remaining])
+		return len(payload), nil
+	}
+
+	_, _ = b.buffer.Write(payload)
+	return len(payload), nil
+}
+
+// Bytes returns buffered bytes.
+// Params: none.
+// Returns: current buffer content.
+func (b *cappedBuffer) Bytes() []byte {
+	return b.buffer.Bytes()
+}
+
+// String returns buffered text.
+// Params: none.
+// Returns: current buffer text.
+func (b *cappedBuffer) String() string {
+	return b.buffer.String()
+}
+
 // ScriptCollector executes external script and converts JSON stdout into metric points.
 // Params: metricName emitted into event.metric and script execution options.
 // Returns: SCRIPT collector instance.
@@ -50,9 +87,7 @@ func NewScriptCollector(
 		commandEnv: mergeEnvironment(env),
 		format:     format,
 		promCfg: PrometheusParseConfig{
-			Include:       options.Include,
-			KeyFromLabels: options.KeyFromLabels,
-			VarMode:       varMode,
+			VarMode: varMode,
 		},
 	}
 }
@@ -78,10 +113,10 @@ func (c *ScriptCollector) Scrape(ctx context.Context) ([]Point, error) {
 	command := exec.CommandContext(runCtx, c.path)
 	command.Env = c.commandEnv
 
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	command.Stdout = &stdout
-	command.Stderr = &stderr
+	stdout := &cappedBuffer{max: MaxPointsJSONBytes + 1}
+	stderr := &cappedBuffer{max: 8 * 1024}
+	command.Stdout = stdout
+	command.Stderr = stderr
 
 	err := command.Run()
 	if err != nil {
@@ -134,7 +169,7 @@ func mergeEnvironment(overrides map[string]string) []string {
 func parseScriptPoints(payload []byte, format string, promCfg PrometheusParseConfig) ([]Point, error) {
 	switch strings.ToLower(strings.TrimSpace(format)) {
 	case "prometheus":
-		return ParsePointsPrometheus(string(payload), promCfg)
+		return ParsePointsPrometheusFromReader(bytes.NewReader(payload), promCfg)
 	default:
 		return ParsePointsJSON(payload)
 	}

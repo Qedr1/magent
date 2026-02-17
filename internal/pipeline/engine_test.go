@@ -102,6 +102,9 @@ func TestBuildScriptWorkers(t *testing.T) {
 	if workers[0].cfg.Instance != "db-0" {
 		t.Fatalf("unexpected script instance: %q", workers[0].cfg.Instance)
 	}
+	if workers[0].cfg.KeepKnown {
+		t.Fatalf("expected keep_known=false for script workers")
+	}
 }
 
 // TestBuildScriptWorkers_LastOnlyAlignsScrapeToSend verifies scrape=send alignment when percentiles are disabled.

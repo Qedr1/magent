@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"path/filepath"
@@ -81,7 +82,6 @@ EOF
 
 	collector := NewScriptCollector("db", path, 2*time.Second, nil, HTTPClientCollectorOptions{
 		Format:  "prometheus",
-		Include: []string{"app_jobs"},
 		VarMode: PrometheusVarModeFull,
 	})
 
@@ -94,6 +94,20 @@ EOF
 	}
 	if got := points[0].Values["app_jobs"].Raw; got != 20.0 {
 		t.Fatalf("unexpected app_jobs: %v", got)
+	}
+}
+
+// TestParseScriptPoints_PrometheusPayloadLimit verifies shared payload-size guard for script prometheus mode.
+// Params: testing.T for assertions.
+// Returns: none.
+func TestParseScriptPoints_PrometheusPayloadLimit(t *testing.T) {
+	tooLarge := bytes.Repeat([]byte("x"), MaxPointsJSONBytes+1)
+	_, err := parseScriptPoints(tooLarge, "prometheus", PrometheusParseConfig{VarMode: PrometheusVarModeFull})
+	if err == nil {
+		t.Fatalf("expected payload-size error")
+	}
+	if !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

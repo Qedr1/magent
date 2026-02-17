@@ -115,12 +115,13 @@ HTTP client metrics (poll):
 - `[[metrics.http_client.<metric_name>]]`:
   - required: `url`, `timeout>0` (default 5s)
   - optional: `format=json|prometheus` (default `json`)
-  - optional for `format=prometheus`: `include=[metric_names...]` (required in this mode), `key_from_labels=[label,...]`, `var_mode=full|short` (default `full`)
+  - optional for `format=prometheus`: `var_mode=full|short` (default `full`)
   - schedule: `scrape` + `send`
   - HTTP: `GET` only; non-2xx is scrape error
   - `url` supports placeholders (path-escaped): `{dc},{host},{project},{role},{metric},{instance}`
   - `format=json`: response uses the External Metric JSON Contract below
-  - `format=prometheus`: parse text exposition; only `counter` and `gauge` are ingested; each sample becomes one point (`key` from labels or `"total"`, `var` from metric name)
+  - `format=prometheus`: parse text exposition; only `counter` and `gauge` are ingested; each sample becomes one point (`key="total"`, `var` from metric name); selection is done by worker filters (`filter_var/drop_var/drop_event`)
+  - external workers (`script/http_client/http_server`) use `KeepKnown=false` (emit only windows with actual samples; no synthetic zero events)
 
 Netflow metric (pull):
 - `[[metrics.netflow]]`:
@@ -253,4 +254,4 @@ Known test-script quirks (do not change semantics):
 
 ## Project plan (status snapshot)
 - Detailed roadmap: `docs/state/detailed_plan.md`.
-- Current: P#1..P#20 DONE; P#21 OPEN; P#22..P#28 DONE; P#29 OPEN; P#31 DONE; P#33..P#35 DONE; P#37..P#40 DONE; P#42 OPEN; P#43..P#44 DONE.
+- Current: P#1..P#20 DONE; P#21 OPEN; P#22..P#28 DONE; P#29 OPEN; P#31 DONE; P#33..P#35 DONE; P#37..P#40 DONE; P#42 OPEN; P#43..P#44 DONE; P#49..P#51 DONE.

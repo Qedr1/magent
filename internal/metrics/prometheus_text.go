@@ -18,20 +18,17 @@ const (
 )
 
 // PrometheusParseConfig controls Prometheus exposition parsing.
-// Params: Include is metric allowlist; VarMode controls variable naming.
-// KeyFromLabels is accepted for backward compatibility but ignored.
+// Params: VarMode controls variable naming.
 // Returns: parser behavior options.
 type PrometheusParseConfig struct {
-	Include       []string
-	KeyFromLabels []string
-	VarMode       string
+	VarMode string
 }
 
 // PrometheusParser holds precompiled Prometheus parsing config for repeated scrapes.
-// Params: include map is pre-normalized.
+// Params: var mode is pre-normalized.
 // Returns: reusable parser instance.
 type PrometheusParser struct {
-	includeVarByMetric map[string]string
+	varMode string
 }
 
 // NewPrometheusParser precompiles Prometheus parse options for repeated parsing.
@@ -43,21 +40,8 @@ func NewPrometheusParser(cfg PrometheusParseConfig) *PrometheusParser {
 		varMode = PrometheusVarModeFull
 	}
 
-	includeVarByMetric := make(map[string]string, len(cfg.Include))
-	for _, metricName := range cfg.Include {
-		trimmed := strings.TrimSpace(metricName)
-		if trimmed == "" {
-			continue
-		}
-		varName := trimmed
-		if varMode == PrometheusVarModeShort {
-			varName = shortPrometheusMetricName(trimmed)
-		}
-		includeVarByMetric[trimmed] = varName
-	}
-
 	return &PrometheusParser{
-		includeVarByMetric: includeVarByMetric,
+		varMode: varMode,
 	}
 }
 
@@ -101,10 +85,6 @@ func ParsePointsPrometheus(payload string, cfg PrometheusParseConfig) ([]Point, 
 // Params: payload contains text exposition.
 // Returns: parsed points or parsing/contract error.
 func (p *PrometheusParser) Parse(payload string) ([]Point, error) {
-	if len(p.includeVarByMetric) == 0 {
-		return nil, fmt.Errorf("include list is empty")
-	}
-
 	metricTypes := make(map[string]string)
 	pointsByKey := make(map[string]map[string]Value)
 	malformedLines := 0
@@ -128,14 +108,13 @@ func (p *PrometheusParser) Parse(payload string) ([]Point, error) {
 			continue
 		}
 
-		varName, ok := p.includeVarByMetric[metricName]
-		if !ok {
-			continue
-		}
-
 		metricType := metricTypes[metricName]
 		if metricType != "counter" && metricType != "gauge" {
 			continue
+		}
+		varName := metricName
+		if p.varMode == PrometheusVarModeShort {
+			varName = shortPrometheusMetricName(metricName)
 		}
 
 		values := pointsByKey["total"]
