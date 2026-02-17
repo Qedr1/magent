@@ -231,6 +231,43 @@ timeout = "-1s"
 	}
 }
 
+// TestLoad_ParsesScriptPrometheusSections verifies script prometheus settings decoding.
+// Params: testing.T for assertions.
+// Returns: none.
+func TestLoad_ParsesScriptPrometheusSections(t *testing.T) {
+	path := writeConfig(t, `
+[global]
+dc = "dc1"
+project = "infra"
+role = "db"
+
+[[collector]]
+addr = ["127.0.0.1:6000"]
+
+[collector.batch]
+max_events = 100
+
+[[metrics.script.demo]]
+path = "./scripts/db.sh"
+format = "prometheus"
+include = ["app_jobs"]
+var_mode = "short"
+`)
+
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+
+	worker := cfg.Metrics.Script["demo"][0]
+	if worker.Format != "prometheus" {
+		t.Fatalf("unexpected script format: %q", worker.Format)
+	}
+	if worker.VarMode != "short" {
+		t.Fatalf("unexpected script var_mode: %q", worker.VarMode)
+	}
+}
+
 // TestLoad_ParsesHTTPClientSections verifies [[metrics.http_client.<name>]] decoding and defaults.
 // Params: testing.T for assertions.
 // Returns: none.
@@ -449,6 +486,44 @@ path = "/metrics"
 	}
 	if got := workers[0].MaxPending; got == 0 {
 		t.Fatalf("expected http-server max_pending default")
+	}
+}
+
+// TestLoad_ParsesHTTPServerPrometheusSections verifies http_server prometheus settings decoding.
+// Params: testing.T for assertions.
+// Returns: none.
+func TestLoad_ParsesHTTPServerPrometheusSections(t *testing.T) {
+	path := writeConfig(t, `
+[global]
+dc = "dc1"
+project = "infra"
+role = "db"
+
+[[collector]]
+addr = ["127.0.0.1:6000"]
+
+[collector.batch]
+max_events = 100
+
+[[metrics.http_server.demo]]
+listen = "127.0.0.1:18081"
+path = "/metrics"
+format = "prometheus"
+include = ["app_jobs"]
+var_mode = "short"
+`)
+
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+
+	worker := cfg.Metrics.HTTPServer["demo"][0]
+	if worker.Format != "prometheus" {
+		t.Fatalf("unexpected http-server format: %q", worker.Format)
+	}
+	if worker.VarMode != "short" {
+		t.Fatalf("unexpected http-server var_mode: %q", worker.VarMode)
 	}
 }
 

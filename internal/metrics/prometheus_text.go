@@ -18,7 +18,8 @@ const (
 )
 
 // PrometheusParseConfig controls Prometheus exposition parsing.
-// Params: Include is metric allowlist; KeyFromLabels forms key; VarMode controls variable naming.
+// Params: Include is metric allowlist; VarMode controls variable naming.
+// KeyFromLabels is accepted for backward compatibility but ignored.
 // Returns: parser behavior options.
 type PrometheusParseConfig struct {
 	Include       []string
@@ -27,11 +28,10 @@ type PrometheusParseConfig struct {
 }
 
 // PrometheusParser holds precompiled Prometheus parsing config for repeated scrapes.
-// Params: include map and key labels are pre-normalized.
+// Params: include map is pre-normalized.
 // Returns: reusable parser instance.
 type PrometheusParser struct {
 	includeVarByMetric map[string]string
-	keyFromLabels      []string
 }
 
 // NewPrometheusParser precompiles Prometheus parse options for repeated parsing.
@@ -56,17 +56,8 @@ func NewPrometheusParser(cfg PrometheusParseConfig) *PrometheusParser {
 		includeVarByMetric[trimmed] = varName
 	}
 
-	keyFromLabels := make([]string, 0, len(cfg.KeyFromLabels))
-	for _, labelName := range cfg.KeyFromLabels {
-		trimmed := strings.TrimSpace(labelName)
-		if trimmed != "" {
-			keyFromLabels = append(keyFromLabels, trimmed)
-		}
-	}
-
 	return &PrometheusParser{
 		includeVarByMetric: includeVarByMetric,
-		keyFromLabels:      keyFromLabels,
 	}
 }
 
@@ -131,27 +122,26 @@ func (p *PrometheusParser) Parse(payload string) ([]Point, error) {
 			continue
 		}
 
-			metricName, labels, value, err := parsePrometheusSampleLine(line)
-			if err != nil {
-				malformedLines++
-				continue
-			}
+		metricName, value, err := parsePrometheusSampleLine(line)
+		if err != nil {
+			malformedLines++
+			continue
+		}
 
-			varName, ok := p.includeVarByMetric[metricName]
-			if !ok {
-				continue
-			}
+		varName, ok := p.includeVarByMetric[metricName]
+		if !ok {
+			continue
+		}
 
 		metricType := metricTypes[metricName]
-			if metricType != "counter" && metricType != "gauge" {
-				continue
-			}
+		if metricType != "counter" && metricType != "gauge" {
+			continue
+		}
 
-			key := buildPrometheusKey(labels, p.keyFromLabels)
-			values := pointsByKey[key]
-			if values == nil {
-				values = make(map[string]Value)
-			pointsByKey[key] = values
+		values := pointsByKey["total"]
+		if values == nil {
+			values = make(map[string]Value)
+			pointsByKey["total"] = values
 		}
 		values[varName] = Value{Raw: value, Kind: KindNumber}
 	}
@@ -201,35 +191,35 @@ func parsePrometheusTypeLine(line string, metricTypes map[string]string) {
 
 // parsePrometheusSampleLine parses one sample line.
 // Params: line contains metric sample in exposition format.
-// Returns: metric name, labels map, numeric value, parse error.
-func parsePrometheusSampleLine(line string) (string, map[string]string, float64, error) {
+// Returns: metric name, numeric value, parse error.
+func parsePrometheusSampleLine(line string) (string, float64, error) {
 	seriesToken, valuePart, err := splitPrometheusSeriesAndValue(line)
 	if err != nil {
-		return "", nil, 0, err
+		return "", 0, err
 	}
 	if seriesToken == "" || valuePart == "" {
-		return "", nil, 0, fmt.Errorf("invalid sample format")
+		return "", 0, fmt.Errorf("invalid sample format")
 	}
 
-	metricName, labels, err := parsePrometheusSeriesToken(seriesToken)
+	metricName, err := parsePrometheusSeriesToken(seriesToken)
 	if err != nil {
-		return "", nil, 0, err
+		return "", 0, err
 	}
 
 	valueFields := strings.Fields(valuePart)
 	if len(valueFields) == 0 {
-		return "", nil, 0, fmt.Errorf("missing sample value")
+		return "", 0, fmt.Errorf("missing sample value")
 	}
 
 	value, err := strconv.ParseFloat(valueFields[0], 64)
 	if err != nil {
-		return "", nil, 0, fmt.Errorf("invalid sample value")
+		return "", 0, fmt.Errorf("invalid sample value")
 	}
 	if math.IsNaN(value) || math.IsInf(value, 0) {
-		return "", nil, 0, fmt.Errorf("sample value must be finite")
+		return "", 0, fmt.Errorf("sample value must be finite")
 	}
 
-	return metricName, labels, value, nil
+	return metricName, value, nil
 }
 
 // splitPrometheusSeriesAndValue splits sample line into series token and numeric/timestamp segment.
@@ -281,141 +271,27 @@ func splitPrometheusSeriesAndValue(line string) (string, string, error) {
 
 // parsePrometheusSeriesToken parses '<metric>{labels}' or '<metric>'.
 // Params: token contains metric and optional labels segment.
-// Returns: metric name, labels map, parse error.
-func parsePrometheusSeriesToken(token string) (string, map[string]string, error) {
+// Returns: metric name, parse error.
+func parsePrometheusSeriesToken(token string) (string, error) {
 	openIdx := strings.IndexByte(token, '{')
 	if openIdx < 0 {
 		name := strings.TrimSpace(token)
 		if name == "" {
-			return "", nil, fmt.Errorf("empty metric name")
+			return "", fmt.Errorf("empty metric name")
 		}
-		return name, map[string]string{}, nil
+		return name, nil
 	}
 
 	closeIdx := strings.LastIndexByte(token, '}')
 	if closeIdx <= openIdx || closeIdx != len(token)-1 {
-		return "", nil, fmt.Errorf("invalid labels block")
+		return "", fmt.Errorf("invalid labels block")
 	}
 
 	name := strings.TrimSpace(token[:openIdx])
 	if name == "" {
-		return "", nil, fmt.Errorf("empty metric name")
+		return "", fmt.Errorf("empty metric name")
 	}
-
-	labelsPart := token[openIdx+1 : closeIdx]
-	labels, err := parsePrometheusLabels(labelsPart)
-	if err != nil {
-		return "", nil, err
-	}
-
-	return name, labels, nil
-}
-
-// parsePrometheusLabels parses comma-separated label assignments.
-// Params: labelsPart contains label assignments without surrounding braces.
-// Returns: labels map or parse error.
-func parsePrometheusLabels(labelsPart string) (map[string]string, error) {
-	labels := make(map[string]string)
-	rest := strings.TrimSpace(labelsPart)
-	for len(rest) > 0 {
-		eqIdx := strings.IndexByte(rest, '=')
-		if eqIdx <= 0 {
-			return nil, fmt.Errorf("invalid label assignment")
-		}
-
-		name := strings.TrimSpace(rest[:eqIdx])
-		if name == "" {
-			return nil, fmt.Errorf("empty label name")
-		}
-
-		rest = strings.TrimSpace(rest[eqIdx+1:])
-		if !strings.HasPrefix(rest, "\"") {
-			return nil, fmt.Errorf("label value must be quoted")
-		}
-
-		value, consumed, err := readPrometheusQuotedValue(rest)
-		if err != nil {
-			return nil, err
-		}
-		labels[name] = value
-
-		rest = strings.TrimSpace(rest[consumed:])
-		if rest == "" {
-			break
-		}
-		if !strings.HasPrefix(rest, ",") {
-			return nil, fmt.Errorf("invalid label separator")
-		}
-		rest = strings.TrimSpace(rest[1:])
-	}
-
-	return labels, nil
-}
-
-// readPrometheusQuotedValue decodes one quoted label value with Prometheus escapes.
-// Params: source starts with '"'.
-// Returns: decoded value, consumed byte count, parse error.
-func readPrometheusQuotedValue(source string) (string, int, error) {
-	if !strings.HasPrefix(source, "\"") {
-		return "", 0, fmt.Errorf("quoted value expected")
-	}
-
-	var builder strings.Builder
-	escaped := false
-	for idx := 1; idx < len(source); idx++ {
-		ch := source[idx]
-		if escaped {
-			switch ch {
-			case '\\', '"':
-				builder.WriteByte(ch)
-			case 'n':
-				builder.WriteByte('\n')
-			case 't':
-				builder.WriteByte('\t')
-			default:
-				builder.WriteByte(ch)
-			}
-			escaped = false
-			continue
-		}
-
-		if ch == '\\' {
-			escaped = true
-			continue
-		}
-		if ch == '"' {
-			return builder.String(), idx + 1, nil
-		}
-		builder.WriteByte(ch)
-	}
-
-	return "", 0, fmt.Errorf("unterminated quoted label value")
-}
-
-// buildPrometheusKey builds stable point key from selected labels.
-// Params: labels is sample label set; keyFromLabels lists ordered label names.
-// Returns: non-empty key string.
-func buildPrometheusKey(labels map[string]string, keyFromLabels []string) string {
-	if len(keyFromLabels) == 0 {
-		return "total"
-	}
-
-	parts := make([]string, 0, len(keyFromLabels))
-	for _, labelName := range keyFromLabels {
-		name := strings.TrimSpace(labelName)
-		if name == "" {
-			continue
-		}
-		value := strings.TrimSpace(labels[name])
-		if value == "" {
-			value = "-"
-		}
-		parts = append(parts, name+"="+value)
-	}
-	if len(parts) == 0 {
-		return "total"
-	}
-	return strings.Join(parts, "|")
+	return name, nil
 }
 
 // shortPrometheusMetricName strips the first namespace segment from metric name.

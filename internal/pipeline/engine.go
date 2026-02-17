@@ -447,6 +447,11 @@ func buildScriptWorkers(
 						definition.Path,
 						definition.Timeout.Duration,
 						definition.Env,
+						metrics.HTTPClientCollectorOptions{
+							Format:  definition.Format,
+							Include: definition.Include,
+							VarMode: definition.VarMode,
+						},
 					),
 					Tags:      tags,
 					KeepKnown: true,

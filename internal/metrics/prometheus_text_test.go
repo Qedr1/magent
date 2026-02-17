@@ -25,12 +25,12 @@ func TestParsePointsPrometheus_MatchingMetricsAndTypes(t *testing.T) {
 		t.Fatalf("ParsePointsPrometheus() error: %v", err)
 	}
 
-	if len(points) != 2 {
-		t.Fatalf("unexpected point count: got=%d want=2", len(points))
+	if len(points) != 1 {
+		t.Fatalf("unexpected point count: got=%d want=1", len(points))
 	}
 
-	assertPointValue(t, points, "host=dev|component_id=-", "vector_build_info", 1)
-	assertPointValue(t, points, "host=dev|component_id=in", "vector_component_received_bytes_total", 42)
+	assertPointValue(t, points, "total", "vector_build_info", 1)
+	assertPointValue(t, points, "total", "vector_component_received_bytes_total", 42)
 }
 
 func TestParsePointsPrometheus_VarModeShort(t *testing.T) {
@@ -52,7 +52,7 @@ func TestParsePointsPrometheus_VarModeShort(t *testing.T) {
 		t.Fatalf("unexpected point count: got=%d want=1", len(points))
 	}
 
-	assertPointValue(t, points, "host=dev|component_id=sink", "buffer_byte_size", 128)
+	assertPointValue(t, points, "total", "buffer_byte_size", 128)
 }
 
 func TestParsePointsPrometheus_NoMatches(t *testing.T) {
@@ -88,7 +88,7 @@ func TestParsePointsPrometheus_LabelValueWithSpaces(t *testing.T) {
 	if len(points) != 1 {
 		t.Fatalf("unexpected point count: got=%d want=1", len(points))
 	}
-	assertPointValue(t, points, "host=dev", "vector_build_info", 1)
+	assertPointValue(t, points, "total", "vector_build_info", 1)
 }
 
 func assertPointValue(t *testing.T, points []Point, key string, varName string, want float64) {

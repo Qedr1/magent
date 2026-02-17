@@ -19,7 +19,7 @@ printf '%s\n' '{"key":"total","data":{"connections":12,"util":{"value":77.7,"kin
 
 	collector := NewScriptCollector("db", path, 2*time.Second, map[string]string{
 		"CUSTOM_FLAG": "1",
-	})
+	}, HTTPClientCollectorOptions{})
 
 	points, err := collector.Scrape(context.Background())
 	if err != nil {
@@ -53,7 +53,7 @@ func TestScriptCollector_ScrapeArray(t *testing.T) {
 printf '%s\n' '[{"key":"db1","data":{"conn":10}},{"key":"db2","data":{"util":50}}]'
 `)
 
-	collector := NewScriptCollector("db", path, 2*time.Second, nil)
+	collector := NewScriptCollector("db", path, 2*time.Second, nil, HTTPClientCollectorOptions{})
 
 	points, err := collector.Scrape(context.Background())
 	if err != nil {
@@ -67,6 +67,36 @@ printf '%s\n' '[{"key":"db1","data":{"conn":10}},{"key":"db2","data":{"util":50}
 	}
 }
 
+// TestScriptCollector_ScrapePrometheus verifies Prometheus stdout parsing for scripts.
+// Params: testing.T for assertions.
+// Returns: none.
+func TestScriptCollector_ScrapePrometheus(t *testing.T) {
+	path := writeExecutableScript(t, `
+cat <<'EOF'
+# TYPE app_jobs gauge
+app_jobs{node="a"} 10
+app_jobs{node="b"} 20
+EOF
+`)
+
+	collector := NewScriptCollector("db", path, 2*time.Second, nil, HTTPClientCollectorOptions{
+		Format:  "prometheus",
+		Include: []string{"app_jobs"},
+		VarMode: PrometheusVarModeFull,
+	})
+
+	points, err := collector.Scrape(context.Background())
+	if err != nil {
+		t.Fatalf("scrape: %v", err)
+	}
+	if len(points) != 1 || points[0].Key != "total" {
+		t.Fatalf("unexpected points: %#v", points)
+	}
+	if got := points[0].Values["app_jobs"].Raw; got != 20.0 {
+		t.Fatalf("unexpected app_jobs: %v", got)
+	}
+}
+
 // TestScriptCollector_ExitCode verifies failure on non-zero script exit code.
 // Params: testing.T for assertions.
 // Returns: none.
@@ -76,7 +106,7 @@ echo 'broken' >&2
 exit 3
 `)
 
-	collector := NewScriptCollector("db", path, 2*time.Second, nil)
+	collector := NewScriptCollector("db", path, 2*time.Second, nil, HTTPClientCollectorOptions{})
 
 	_, err := collector.Scrape(context.Background())
 	if err == nil {
@@ -96,7 +126,7 @@ sleep 1
 printf '%s\n' '{"key":"total","data":{"x":1}}'
 `)
 
-	collector := NewScriptCollector("db", path, 100*time.Millisecond, nil)
+	collector := NewScriptCollector("db", path, 100*time.Millisecond, nil, HTTPClientCollectorOptions{})
 
 	_, err := collector.Scrape(context.Background())
 	if err == nil {
@@ -115,7 +145,7 @@ func TestScriptCollector_InvalidJSONContract(t *testing.T) {
 printf '%s\n' '{"data":{"x":1}}'
 `)
 
-	collector := NewScriptCollector("db", path, 2*time.Second, nil)
+	collector := NewScriptCollector("db", path, 2*time.Second, nil, HTTPClientCollectorOptions{})
 
 	_, err := collector.Scrape(context.Background())
 	if err == nil {

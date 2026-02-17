@@ -71,9 +71,9 @@ func TestHTTPClientCollectorScrapePrometheus(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Scrape() error: %v", err)
 	}
-	if len(points) != 2 {
-		t.Fatalf("unexpected point count: got=%d want=2", len(points))
+	if len(points) != 1 {
+		t.Fatalf("unexpected point count: got=%d want=1", len(points))
 	}
-	assertPointValue(t, points, "host=dev|component_id=-", "vector_build_info", 1)
-	assertPointValue(t, points, "host=dev|component_id=in", "vector_component_received_bytes_total", 42)
+	assertPointValue(t, points, "total", "vector_build_info", 1)
+	assertPointValue(t, points, "total", "vector_component_received_bytes_total", 42)
 }

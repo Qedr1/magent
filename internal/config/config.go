@@ -186,6 +186,9 @@ type ScriptWorkerConfig struct {
 	Path        string            `toml:"path"`
 	Timeout     Duration          `toml:"timeout"`
 	Env         map[string]string `toml:"env"`
+	Format      string            `toml:"format"`
+	Include     []string          `toml:"include"`
+	VarMode     string            `toml:"var_mode"`
 }
 
 // HTTPServerWorkerConfig defines one HTTP server metric endpoint.
@@ -201,6 +204,9 @@ type HTTPServerWorkerConfig struct {
 	Listen      string   `toml:"listen"`
 	Path        string   `toml:"path"`
 	MaxPending  uint64   `toml:"max_pending"`
+	Format      string   `toml:"format"`
+	Include     []string `toml:"include"`
+	VarMode     string   `toml:"var_mode"`
 }
 
 // HTTPClientWorkerConfig defines one HTTP client metric worker.
@@ -358,6 +364,12 @@ func (c *Config) applyDefaults() error {
 			if workers[idx].Env == nil {
 				workers[idx].Env = map[string]string{}
 			}
+			workers[idx].Format = lowerOrDefault(workers[idx].Format, "json")
+			if workers[idx].VarMode == "" {
+				workers[idx].VarMode = "full"
+			} else {
+				workers[idx].VarMode = strings.ToLower(strings.TrimSpace(workers[idx].VarMode))
+			}
 		}
 		c.Metrics.Script[scriptName] = workers
 	}
@@ -367,6 +379,12 @@ func (c *Config) applyDefaults() error {
 		for idx := range workers {
 			if workers[idx].MaxPending == 0 {
 				workers[idx].MaxPending = defaultHTTPMaxPending
+			}
+			workers[idx].Format = lowerOrDefault(workers[idx].Format, "json")
+			if workers[idx].VarMode == "" {
+				workers[idx].VarMode = "full"
+			} else {
+				workers[idx].VarMode = strings.ToLower(strings.TrimSpace(workers[idx].VarMode))
 			}
 		}
 		c.Metrics.HTTPServer[metricName] = workers
@@ -692,6 +710,9 @@ func validateScriptWorkers(path string, workers map[string][]ScriptWorkerConfig)
 			if strings.TrimSpace(worker.Path) == "" {
 				return fmt.Errorf("%s.path is required", workerPath)
 			}
+			if err := validateExternalMetricFormat(workerPath, worker.Format, worker.Include, worker.VarMode); err != nil {
+				return err
+			}
 
 			for _, p := range worker.Percentiles {
 				if p <= 0 || p > 100 {
@@ -750,6 +771,9 @@ func validateHTTPServerWorkers(path string, workers map[string][]HTTPServerWorke
 			if worker.MaxPending == 0 {
 				return fmt.Errorf("%s.max_pending must be > 0", workerPath)
 			}
+			if err := validateExternalMetricFormat(workerPath, worker.Format, worker.Include, worker.VarMode); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -781,29 +805,13 @@ func validateHTTPClientWorkers(path string, workers map[string][]HTTPClientWorke
 			if strings.TrimSpace(worker.URL) == "" {
 				return fmt.Errorf("%s.url is required", workerPath)
 			}
-			switch strings.ToLower(strings.TrimSpace(worker.Format)) {
-			case "json":
-			case "prometheus":
-				if len(worker.Include) == 0 {
-					return fmt.Errorf("%s.include must contain at least one metric for format=prometheus", workerPath)
+			if err := validateExternalMetricFormat(workerPath, worker.Format, worker.Include, worker.VarMode); err != nil {
+				return err
+			}
+			for labelIdx, labelName := range worker.KeyFromLabels {
+				if strings.TrimSpace(labelName) == "" {
+					return fmt.Errorf("%s.key_from_labels[%d] cannot be empty", workerPath, labelIdx)
 				}
-				for includeIdx, includeName := range worker.Include {
-					if strings.TrimSpace(includeName) == "" {
-						return fmt.Errorf("%s.include[%d] cannot be empty", workerPath, includeIdx)
-					}
-				}
-				for labelIdx, labelName := range worker.KeyFromLabels {
-					if strings.TrimSpace(labelName) == "" {
-						return fmt.Errorf("%s.key_from_labels[%d] cannot be empty", workerPath, labelIdx)
-					}
-				}
-				switch strings.ToLower(strings.TrimSpace(worker.VarMode)) {
-				case "full", "short":
-				default:
-					return fmt.Errorf("%s.var_mode must be one of: full, short", workerPath)
-				}
-			default:
-				return fmt.Errorf("%s.format must be one of: json, prometheus", workerPath)
 			}
 
 			for _, p := range worker.Percentiles {
@@ -815,6 +823,33 @@ func validateHTTPClientWorkers(path string, workers map[string][]HTTPClientWorke
 	}
 
 	return nil
+}
+
+// validateExternalMetricFormat validates shared json/prometheus format options.
+// Params: path is worker path for errors; format/include/varMode are source options.
+// Returns: validation error when format options are invalid.
+func validateExternalMetricFormat(path string, format string, include []string, varMode string) error {
+	switch strings.ToLower(strings.TrimSpace(format)) {
+	case "json":
+		return nil
+	case "prometheus":
+		if len(include) == 0 {
+			return fmt.Errorf("%s.include must contain at least one metric for format=prometheus", path)
+		}
+		for includeIdx, includeName := range include {
+			if strings.TrimSpace(includeName) == "" {
+				return fmt.Errorf("%s.include[%d] cannot be empty", path, includeIdx)
+			}
+		}
+		switch strings.ToLower(strings.TrimSpace(varMode)) {
+		case "full", "short":
+			return nil
+		default:
+			return fmt.Errorf("%s.var_mode must be one of: full, short", path)
+		}
+	default:
+		return fmt.Errorf("%s.format must be one of: json, prometheus", path)
+	}
 }
 
 // validateClickHouseConfig validates clickhouse connection settings.

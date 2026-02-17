@@ -11,6 +11,7 @@ set -euo pipefail
 DB_NAME="${1:-metrics_http_client_vector_prom_e2e}"
 TABLE_NAME="vector_monitor"
 COLLECTOR_ADDR="127.0.0.1:16000"
+EXPORTER_METRICS_ADDR="127.0.0.1:19599"
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 AGENT_LOG="/tmp/magent-http-client-vector-prom-e2e.log"
@@ -46,20 +47,21 @@ clickhouse-client --query "TRUNCATE TABLE IF EXISTS ${DB_NAME}.${TABLE_NAME}"
 sed \
   -e "s/database = \"metrics\"/database = \"${DB_NAME}\"/" \
   -e 's/address = "0.0.0.0:6000"/address = "0.0.0.0:16000"/' \
+  -e 's/address = "127.0.0.1:19598"/address = "127.0.0.1:19698"/' \
   -e 's/timeout_secs = 5/timeout_secs = 1/' \
   "${ROOT_DIR}/deploy/vector/clickhouse-e2e.toml" > "${COLLECTOR_VECTOR_CONFIG}"
 
 vector --config "${COLLECTOR_VECTOR_CONFIG}" >"${COLLECTOR_VECTOR_LOG}" 2>&1 &
 COLLECTOR_VECTOR_PID="$!"
 
-cat > "${EXPORTER_VECTOR_CONFIG}" <<'CFG'
+cat > "${EXPORTER_VECTOR_CONFIG}" <<CFG
 [sources.int]
 type = "internal_metrics"
 
 [sinks.prom]
 type = "prometheus_exporter"
 inputs = ["int"]
-address = "127.0.0.1:19598"
+address = "${EXPORTER_METRICS_ADDR}"
 default_namespace = "vector"
 
 [api]
@@ -72,7 +74,7 @@ vector --config "${EXPORTER_VECTOR_CONFIG}" >"${EXPORTER_VECTOR_LOG}" 2>&1 &
 EXPORTER_VECTOR_PID="$!"
 
 for _ in $(seq 1 30); do
-  if curl -fsS "http://127.0.0.1:19598/metrics" >/dev/null 2>&1; then
+  if curl -fsS "http://${EXPORTER_METRICS_ADDR}/metrics" >/dev/null 2>&1; then
     break
   fi
   sleep 0.5
@@ -103,7 +105,7 @@ percentiles = []
 
 [[metrics.http_client.${TABLE_NAME}]]
 name = "vector-monitor-prom"
-url = "http://127.0.0.1:19598/metrics"
+url = "http://${EXPORTER_METRICS_ADDR}/metrics"
 format = "prometheus"
 include = ["vector_build_info","vector_api_started_total"]
 key_from_labels = ["host"]
@@ -149,7 +151,7 @@ fi
 
 build_rows="$(clickhouse-client --query "SELECT count() FROM ${DB_NAME}.${TABLE_NAME} WHERE var='vector_build_info' AND agg='last'")"
 api_rows="$(clickhouse-client --query "SELECT count() FROM ${DB_NAME}.${TABLE_NAME} WHERE var='vector_api_started_total' AND agg='last'")"
-bad_key_rows="$(clickhouse-client --query "SELECT count() FROM ${DB_NAME}.${TABLE_NAME} WHERE var IN ('vector_build_info','vector_api_started_total') AND key NOT LIKE 'host=%'")"
+bad_key_rows="$(clickhouse-client --query "SELECT count() FROM ${DB_NAME}.${TABLE_NAME} WHERE var IN ('vector_build_info','vector_api_started_total') AND key != 'total'")"
 non_last_rows="$(clickhouse-client --query "SELECT count() FROM ${DB_NAME}.${TABLE_NAME} WHERE var IN ('vector_build_info','vector_api_started_total') AND agg != 'last'")"
 
 if [[ "${build_rows}" -le 0 ]]; then

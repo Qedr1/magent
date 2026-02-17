@@ -20,6 +20,8 @@ type ScriptCollector struct {
 	path       string
 	timeout    time.Duration
 	commandEnv []string
+	format     string
+	promCfg    PrometheusParseConfig
 }
 
 // NewScriptCollector creates a SCRIPT collector.
@@ -30,12 +32,28 @@ func NewScriptCollector(
 	path string,
 	timeout time.Duration,
 	env map[string]string,
+	options HTTPClientCollectorOptions,
 ) *ScriptCollector {
+	format := strings.ToLower(strings.TrimSpace(options.Format))
+	if format == "" {
+		format = "json"
+	}
+	varMode := strings.ToLower(strings.TrimSpace(options.VarMode))
+	if varMode == "" {
+		varMode = PrometheusVarModeFull
+	}
+
 	return &ScriptCollector{
 		metricName: metricName,
 		path:       strings.TrimSpace(path),
 		timeout:    timeout,
 		commandEnv: mergeEnvironment(env),
+		format:     format,
+		promCfg: PrometheusParseConfig{
+			Include:       options.Include,
+			KeyFromLabels: options.KeyFromLabels,
+			VarMode:       varMode,
+		},
 	}
 }
 
@@ -78,7 +96,7 @@ func (c *ScriptCollector) Scrape(ctx context.Context) ([]Point, error) {
 		return nil, fmt.Errorf("run script %q: %w (stderr: %s)", c.path, err, stderrText)
 	}
 
-	points, err := parseScriptPoints(stdout.Bytes())
+	points, err := parseScriptPoints(stdout.Bytes(), c.format, c.promCfg)
 	if err != nil {
 		return nil, fmt.Errorf("parse script %q stdout: %w", c.path, err)
 	}
@@ -113,6 +131,11 @@ func mergeEnvironment(overrides map[string]string) []string {
 // parseScriptPoints parses script stdout payload into metric points.
 // Params: payload raw stdout bytes.
 // Returns: parsed points or contract error.
-func parseScriptPoints(payload []byte) ([]Point, error) {
-	return ParsePointsJSON(payload)
+func parseScriptPoints(payload []byte, format string, promCfg PrometheusParseConfig) ([]Point, error) {
+	switch strings.ToLower(strings.TrimSpace(format)) {
+	case "prometheus":
+		return ParsePointsPrometheus(string(payload), promCfg)
+	default:
+		return ParsePointsJSON(payload)
+	}
 }

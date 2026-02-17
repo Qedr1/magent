@@ -146,12 +146,12 @@ func buildHTTPServerRunners(
 		metric := strings.TrimSpace(metricName)
 		definitions := cfg.Metrics.HTTPServer[metricName]
 
-			for idx, definition := range definitions {
-				dropConditions, err := compileDropConditions(definition.DropEvent)
-				if err != nil {
-					cleanupServers()
-					return nil, fmt.Errorf("build http_server worker %s[%d]: %w", metric, idx, err)
-				}
+		for idx, definition := range definitions {
+			dropConditions, err := compileDropConditions(definition.DropEvent)
+			if err != nil {
+				cleanupServers()
+				return nil, fmt.Errorf("build http_server worker %s[%d]: %w", metric, idx, err)
+			}
 
 			sendEvery := cfg.Metrics.Send.Duration
 			if sendEvery <= 0 {
@@ -183,11 +183,11 @@ func buildHTTPServerRunners(
 				},
 				sink,
 				logger,
-				)
-				if err != nil {
-					cleanupServers()
-					return nil, fmt.Errorf("build http_server worker %s[%d]: %w", metric, idx, err)
-				}
+			)
+			if err != nil {
+				cleanupServers()
+				return nil, fmt.Errorf("build http_server worker %s[%d]: %w", metric, idx, err)
+			}
 
 			out = append(out, worker)
 
@@ -197,11 +197,11 @@ func buildHTTPServerRunners(
 			group := groups[listen]
 			if group == nil {
 				mux := http.NewServeMux()
-					srv, err := newHTTPIngestServer(listen, mux, logger)
-					if err != nil {
-						cleanupServers()
-						return nil, err
-					}
+				srv, err := newHTTPIngestServer(listen, mux, logger)
+				if err != nil {
+					cleanupServers()
+					return nil, err
+				}
 				group = &serverGroup{
 					mux:   mux,
 					paths: make(map[string]struct{}),
@@ -211,13 +211,21 @@ func buildHTTPServerRunners(
 				out = append(out, srv)
 			}
 
-				if _, exists := group.paths[path]; exists {
-					cleanupServers()
-					return nil, fmt.Errorf("duplicate http_server route: listen=%q path=%q", listen, path)
-				}
+			if _, exists := group.paths[path]; exists {
+				cleanupServers()
+				return nil, fmt.Errorf("duplicate http_server route: listen=%q path=%q", listen, path)
+			}
 			group.paths[path] = struct{}{}
 
-			group.mux.HandleFunc(path, makeHTTPIngestHandler(worker, metric, instance, logger))
+			group.mux.HandleFunc(path, makeHTTPIngestHandler(
+				worker,
+				metric,
+				instance,
+				definition.Format,
+				definition.Include,
+				definition.VarMode,
+				logger,
+			))
 		}
 	}
 
@@ -227,14 +235,40 @@ func buildHTTPServerRunners(
 // makeHTTPIngestHandler builds HTTP handler that parses points and enqueues them into a push worker.
 // Params: worker target push worker; metric/instance for logs; logger root logger.
 // Returns: HTTP handler function.
-func makeHTTPIngestHandler(worker *pushWorker, metric string, instance string, logger *slog.Logger) http.HandlerFunc {
+func makeHTTPIngestHandler(
+	worker *pushWorker,
+	metric string,
+	instance string,
+	format string,
+	include []string,
+	varMode string,
+	logger *slog.Logger,
+) http.HandlerFunc {
+	format = strings.ToLower(strings.TrimSpace(format))
+	if format == "" {
+		format = "json"
+	}
+	promCfg := metrics.PrometheusParseConfig{
+		Include: include,
+		VarMode: varMode,
+	}
+
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			w.WriteHeader(http.StatusMethodNotAllowed)
 			return
 		}
 
-		points, err := metrics.ParsePointsJSONFromReader(r.Body)
+		var (
+			points []metrics.Point
+			err    error
+		)
+		switch format {
+		case "prometheus":
+			points, err = metrics.ParsePointsPrometheusFromReader(r.Body, promCfg)
+		default:
+			points, err = metrics.ParsePointsJSONFromReader(r.Body)
+		}
 		if err != nil {
 			logger.Warn("http ingest parse failed", slog.String("metric", metric), slog.String("instance", instance), slog.String("error", err.Error()))
 			w.WriteHeader(http.StatusBadRequest)
