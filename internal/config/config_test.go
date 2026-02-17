@@ -516,6 +516,52 @@ var_mode = "short"
 	}
 }
 
+// TestLoad_ParsesNETSections verifies [[metrics.net]] decoding and tcp_cc_top_n defaults.
+// Params: testing.T for assertions.
+// Returns: none.
+func TestLoad_ParsesNETSections(t *testing.T) {
+	path := writeConfig(t, `
+[global]
+dc = "dc1"
+project = "infra"
+role = "db"
+
+[[collector]]
+addr = ["127.0.0.1:6000"]
+
+[collector.batch]
+max_events = 100
+
+[[metrics.net]]
+name = "net-default"
+
+[[metrics.net]]
+name = "net-custom"
+tcp_cc_top_n = 77
+`)
+
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if len(cfg.Metrics.NET) != 2 {
+		t.Fatalf("unexpected net workers count: %d", len(cfg.Metrics.NET))
+	}
+
+	if cfg.Metrics.NET[0].TCPCCTopN == nil {
+		t.Fatalf("expected metrics.net[0].tcp_cc_top_n default")
+	}
+	if got := *cfg.Metrics.NET[0].TCPCCTopN; got != 2000 {
+		t.Fatalf("unexpected metrics.net[0].tcp_cc_top_n default: %d", got)
+	}
+	if cfg.Metrics.NET[1].TCPCCTopN == nil {
+		t.Fatalf("expected metrics.net[1].tcp_cc_top_n")
+	}
+	if got := *cfg.Metrics.NET[1].TCPCCTopN; got != 77 {
+		t.Fatalf("unexpected metrics.net[1].tcp_cc_top_n: %d", got)
+	}
+}
+
 // TestLoad_ParsesNetflowSections verifies [[metrics.netflow]] decoding and defaults.
 // Params: testing.T for assertions.
 // Returns: none.

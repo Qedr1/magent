@@ -446,3 +446,17 @@ func TestNormalizePercentiles(t *testing.T) {
 		})
 	}
 }
+
+// TestResolveNetTCPCCTopN verifies pointer-based net tcp_cc_top_n extraction.
+// Params: testing.T for assertions.
+// Returns: none.
+func TestResolveNetTCPCCTopN(t *testing.T) {
+	if got := resolveNetTCPCCTopN(config.MetricWorkerConfig{}); got != 0 {
+		t.Fatalf("unexpected nil-pointer fallback: %d", got)
+	}
+
+	custom := uint32(55)
+	if got := resolveNetTCPCCTopN(config.MetricWorkerConfig{TCPCCTopN: &custom}); got != 55 {
+		t.Fatalf("unexpected extracted value: %d", got)
+	}
+}

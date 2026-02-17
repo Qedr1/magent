@@ -116,8 +116,8 @@ func NewFromConfig(ctx context.Context, cfg *config.Config, logger *slog.Logger)
 		{
 			metric:      "net",
 			definitions: cfg.Metrics.NET,
-			factory: func(_ config.MetricWorkerConfig) metrics.Collector {
-				return metrics.NewNETCollector("net")
+			factory: func(definition config.MetricWorkerConfig) metrics.Collector {
+				return metrics.NewNETCollector("net", resolveNetTCPCCTopN(definition))
 			},
 		},
 		{
@@ -520,6 +520,16 @@ func defaultWorkerInstance(name string, prefix string, index int) string {
 		base = "worker"
 	}
 	return base + "-" + strconv.Itoa(index)
+}
+
+// resolveNetTCPCCTopN resolves net tcp cc socket sample limit from worker config.
+// Params: definition worker configuration for net metric.
+// Returns: configured top-N value (0 disables by-cc sampling).
+func resolveNetTCPCCTopN(definition config.MetricWorkerConfig) uint32 {
+	if definition.TCPCCTopN == nil {
+		return 0
+	}
+	return *definition.TCPCCTopN
 }
 
 // compileDropConditions parses drop_event expressions.

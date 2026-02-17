@@ -57,6 +57,7 @@ send = "30s"
 name = "net-main"
 scrape = "5s"
 send = "30s"
+tcp_cc_top_n = 2000 # by-cc tcp socket sampling limit; set 0 to disable key=cc:<algo> points
 # filter_var = ["rx_*", "tx_*"]
 # drop_var = ["rx_err", "tx_err", "rx_drop", "tx_drop"]
 # drop_event = ["key!=eth*"]

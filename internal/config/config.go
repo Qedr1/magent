@@ -22,6 +22,7 @@ const (
 	defaultHTTPMaxPending  = 4096
 	defaultNetflowTopN     = 20
 	defaultNetflowFlowIdle = 10 * time.Second
+	defaultNetTCPCCTopN    = uint32(2000)
 	defaultDBHost          = "127.0.0.1"
 	defaultDBPort          = 8123
 	defaultDBName          = "metrics"
@@ -156,6 +157,7 @@ type MetricWorkerConfig struct {
 	DropVar     []string `toml:"drop_var"`
 	FilterVar   []string `toml:"filter_var"`
 	DropEvent   []string `toml:"drop_event"`
+	TCPCCTopN   *uint32  `toml:"tcp_cc_top_n"`
 }
 
 // ProcessWorkerConfig defines one process metric worker with thresholds.
@@ -387,6 +389,12 @@ func (c *Config) applyDefaults() error {
 		}
 	}
 
+	for idx := range c.Metrics.NET {
+		if c.Metrics.NET[idx].TCPCCTopN == nil {
+			c.Metrics.NET[idx].TCPCCTopN = uint32Ptr(defaultNetTCPCCTopN)
+		}
+	}
+
 	return nil
 }
 
@@ -558,6 +566,14 @@ func lowerOrDefault(value, fallback string) string {
 		return fallback
 	}
 	return normalized
+}
+
+// uint32Ptr returns pointer to provided uint32 value.
+// Params: value to allocate.
+// Returns: pointer to copied value.
+func uint32Ptr(value uint32) *uint32 {
+	copied := value
+	return &copied
 }
 
 // normalizeExternalMetricFormatVarMode normalizes external source format and var-mode defaults.

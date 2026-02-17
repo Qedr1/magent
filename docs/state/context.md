@@ -87,7 +87,7 @@ Metrics:
 - `[[metrics.cpu]]` -> metric `cpu`
 - `[[metrics.ram]]` -> `ram`
 - `[[metrics.swap]]` -> `swap`
-- `[[metrics.net]]` -> `net`
+- `[[metrics.net]]` -> `net`; optional `tcp_cc_top_n` (default `2000`, `0` disables `key=cc:<algo>` point)
 - `[[metrics.netflow]]` -> `netflow` (AF_PACKET raw capture; no cgo)
 - `[[metrics.disk]]` -> `disk`
 - `[[metrics.fs]]` -> `fs`
@@ -157,11 +157,10 @@ Keys are always strings; values are normalized as above.
 - `cpu`: key `total` + `coreN`; var: `util` (%)
 - `ram`: key `total`; vars: `total,used,free` (bytes), `util` (%)
 - `swap`: key `total`; vars: `total,used` (bytes), `util` (%)
-- `net`: key `<iface>`; vars:
-  - `tx_bytes,rx_bytes` (delta bytes since previous scrape)
-  - `tx_bytes_per_sec,rx_bytes_per_sec` (bytes/s)
-  - `tx_pkt,rx_pkt` (pkt/s)
-  - `tx_err,rx_err,tx_drop,rx_drop` (delta counters)
+- `net`:
+  - key `<iface>` vars: `tx_bytes,rx_bytes` (delta bytes), `tx_bytes_per_sec,rx_bytes_per_sec` (bytes/s), `tx_pkt,rx_pkt` (pkt/s), `tx_err,rx_err,tx_drop,rx_drop` (delta counters)
+  - key `total` vars (host-level per-scrape deltas): `tcp_active_opens,tcp_passive_opens,tcp_retrans_segs,tcp_timeouts,tcp_out_rsts,udp_in_datagrams,udp_out_datagrams,udp_in_errors,udp_no_ports,udp_rcvbuf_errors,udp_sndbuf_errors`
+  - key `cc:<algo>` vars (socket sample snapshot): `tcp_sockets,tcp_tx_queue_bytes,tcp_rx_queue_bytes,tcp_retrans_pending,tcp_cwnd_segs`
 - `netflow`: key `iface|proto|src_ip|src_port|dst_ip|dst_port`; vars: `bytes,packets,flows` (window top-N by bytes, counters per scrape window; `flows` increments for TCP on `SYN&&!ACK`, for UDP on inactivity gap `>= flow_idle_timeout`)
 - `disk`: key `/dev/<name>`; vars:
   - `rx_io,tx_io` (ops/s)
@@ -254,4 +253,4 @@ Known test-script quirks (do not change semantics):
 
 ## Project plan (status snapshot)
 - Detailed roadmap: `docs/state/detailed_plan.md`.
-- Current: P#1..P#20 DONE; P#21 OPEN; P#22..P#28 DONE; P#29 OPEN; P#31 DONE; P#33..P#35 DONE; P#37..P#40 DONE; P#42 OPEN; P#43..P#44 DONE; P#49..P#52 DONE.
+- Current: P#1..P#20 DONE; P#21 OPEN; P#22..P#28 DONE; P#29 OPEN; P#31 DONE; P#33..P#35 DONE; P#37..P#40 DONE; P#42 OPEN; P#43..P#44 DONE; P#49..P#54 DONE.
