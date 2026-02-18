@@ -57,8 +57,8 @@ func buildHTTPClientWorkers(
 			}
 
 			resolvedURL := expandURLTemplate(definition.URL, tags, metric, resolved.instance)
-			worker, err := newMetricWorker(
-				WorkerConfig{
+			worker, err := buildPullMetricWorker(
+				pullWorkerBuildSpec{
 					Metric:      metric,
 					Instance:    resolved.instance,
 					ScrapeEvery: resolved.scrapeEvery,

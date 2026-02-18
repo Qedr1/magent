@@ -381,6 +381,51 @@ func (s *cancelAwareSender) Successful() int {
 	return s.successful
 }
 
+type closeAwareSender struct {
+	mu       sync.Mutex
+	closeCnt int
+}
+
+// Encode returns static payload.
+// Params: events ignored.
+// Returns: static encoded payload.
+func (s *closeAwareSender) Encode(_ []Event) ([]byte, error) {
+	return []byte("payload"), nil
+}
+
+// SendBatch succeeds in tests.
+// Params: ctx/address/events/timeout ignored.
+// Returns: nil.
+func (s *closeAwareSender) SendBatch(_ context.Context, _ string, _ []Event, _ time.Duration) error {
+	return nil
+}
+
+// Send succeeds in tests.
+// Params: ctx/address/payload/timeout ignored.
+// Returns: nil.
+func (s *closeAwareSender) Send(_ context.Context, _ string, _ []byte, _ time.Duration) error {
+	return nil
+}
+
+// Close tracks sender close invocations.
+// Params: none.
+// Returns: nil.
+func (s *closeAwareSender) Close() error {
+	s.mu.Lock()
+	s.closeCnt++
+	s.mu.Unlock()
+	return nil
+}
+
+// CloseCount returns total Close invocations.
+// Params: none.
+// Returns: close call count.
+func (s *closeAwareSender) CloseCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closeCnt
+}
+
 // TestCollectorWorker_RetryDrainsQueue verifies queued payload is retried and acked by retry ticker.
 // Params: testing.T for assertions.
 // Returns: none.
@@ -503,6 +548,56 @@ func TestCollectorWorker_RunFlushesBatchOnShutdown(t *testing.T) {
 	if sender.Successful() == 0 {
 		t.Fatalf("expected final shutdown flush to send at least one batch")
 	}
+}
+
+// TestCollectorSink_ClosesSenderOnceAfterWorkersStop verifies sender lifecycle close on sink shutdown.
+// Params: testing.T for assertions.
+// Returns: none.
+func TestCollectorSink_ClosesSenderOnceAfterWorkersStop(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	sender := &closeAwareSender{}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	collectors := []config.CollectorConfig{
+		{
+			Name:          "c1",
+			Addr:          []string{"127.0.0.1:6000"},
+			Timeout:       config.Duration{Duration: 100 * time.Millisecond},
+			RetryInterval: config.Duration{Duration: 100 * time.Millisecond},
+			Batch: config.CollectorBatchConfig{
+				MaxEvents: 10,
+				MaxAge:    config.Duration{Duration: time.Second},
+			},
+		},
+		{
+			Name:          "c2",
+			Addr:          []string{"127.0.0.1:6001"},
+			Timeout:       config.Duration{Duration: 100 * time.Millisecond},
+			RetryInterval: config.Duration{Duration: 100 * time.Millisecond},
+			Batch: config.CollectorBatchConfig{
+				MaxEvents: 10,
+				MaxAge:    config.Duration{Duration: time.Second},
+			},
+		},
+	}
+
+	_, err := NewCollectorSink(ctx, collectors, logger, sender)
+	if err != nil {
+		t.Fatalf("NewCollectorSink: %v", err)
+	}
+
+	cancel()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if sender.CloseCount() == 1 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	t.Fatalf("expected sender Close() to be called once, got %d", sender.CloseCount())
 }
 
 type recordingSink struct {

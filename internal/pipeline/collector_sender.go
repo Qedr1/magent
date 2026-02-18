@@ -36,6 +36,29 @@ type VectorGRPCSender struct {
 	localIP map[string]string
 }
 
+// Close closes all cached gRPC connections and clears sender caches.
+// Params: none.
+// Returns: first close error when present.
+func (s *VectorGRPCSender) Close() error {
+	s.mu.Lock()
+	conns := s.conns
+	s.conns = nil
+	s.clients = nil
+	s.localIP = nil
+	s.mu.Unlock()
+
+	var firstErr error
+	for _, conn := range conns {
+		if conn == nil {
+			continue
+		}
+		if err := conn.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
+
 // Encode serializes a batch into protobuf PushEventsRequest payload.
 // Params: events batch.
 // Returns: protobuf payload or encode error.

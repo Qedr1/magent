@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"magent/internal/config"
@@ -21,6 +22,10 @@ const (
 type CollectorSink struct {
 	workers []*collectorWorker
 	logger  *slog.Logger
+	sender  CollectorSender
+
+	workersWG sync.WaitGroup
+	closeOnce sync.Once
 }
 
 type collectorWorker struct {
@@ -34,6 +39,10 @@ type collectorWorker struct {
 
 	batch      []Event
 	batchStart time.Time
+}
+
+type senderCloser interface {
+	Close() error
 }
 
 // NewCollectorSink creates sink workers and starts their loops.
@@ -55,6 +64,7 @@ func NewCollectorSink(
 	out := &CollectorSink{
 		workers: make([]*collectorWorker, 0, len(collectors)),
 		logger:  logger,
+		sender:  sender,
 	}
 	cleanupQueues := func() {
 		for _, worker := range out.workers {
@@ -75,17 +85,17 @@ func NewCollectorSink(
 
 		var queue *DiskQueue
 		var err error
-			if cfg.Queue.Enabled {
-				queue, err = OpenDiskQueue(
+		if cfg.Queue.Enabled {
+			queue, err = OpenDiskQueue(
 				cfg.Queue.Dir,
 				cfg.Queue.MaxEvents,
 				cfg.Queue.MaxAge.Duration,
 			)
-				if err != nil {
-					cleanupQueues()
-					return nil, fmt.Errorf("init queue for %s: %w", name, err)
-				}
+			if err != nil {
+				cleanupQueues()
+				return nil, fmt.Errorf("init queue for %s: %w", name, err)
 			}
+		}
 
 		worker := &collectorWorker{
 			name:   name,
@@ -99,9 +109,17 @@ func NewCollectorSink(
 		out.workers = append(out.workers, worker)
 	}
 
+	out.workersWG.Add(len(out.workers))
 	for _, worker := range out.workers {
-		go worker.run(ctx)
+		go func(active *collectorWorker) {
+			defer out.workersWG.Done()
+			active.run(ctx)
+		}(worker)
 	}
+	go func() {
+		out.workersWG.Wait()
+		out.closeSender()
+	}()
 
 	return out, nil
 }
@@ -123,6 +141,24 @@ func (s *CollectorSink) Consume(ctx context.Context, event Event) error {
 	}
 
 	return nil
+}
+
+// closeSender closes collector sender resources once after worker shutdown.
+// Params: none.
+// Returns: none.
+func (s *CollectorSink) closeSender() {
+	if s == nil {
+		return
+	}
+	s.closeOnce.Do(func() {
+		closer, ok := s.sender.(senderCloser)
+		if !ok {
+			return
+		}
+		if err := closer.Close(); err != nil && s.logger != nil {
+			s.logger.Error("close collector sender failed", slog.String("error", err.Error()))
+		}
+	})
 }
 
 // run executes collector worker loop: batching, sending, and queue draining.

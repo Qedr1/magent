@@ -92,7 +92,7 @@ EOF
 	if len(points) != 1 || points[0].Key != "total" {
 		t.Fatalf("unexpected points: %#v", points)
 	}
-	if got := points[0].Values["app_jobs"].Raw; got != 20.0 {
+	if got := points[0].Values["app_jobs"].Raw; got != 30.0 {
 		t.Fatalf("unexpected app_jobs: %v", got)
 	}
 }

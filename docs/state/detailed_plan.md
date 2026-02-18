@@ -50,3 +50,9 @@ Status rules: `OPEN` by default; set to `DONE` only after user OK + tests pass; 
 - P#53 [DONE]: Extend built-in `metrics.net` with host-level `tcp_*`/`udp_*` totals (`key=total`) and TCP congestion-control quality groups (`key=cc:<algo>`, top-N sockets from config), then validate unit+e2e delivery to ClickHouse.
 - P#54 [DONE]: Audit current codebase for duplicated/non-uniform logic after NET expansion, remove minor dead code, revalidate (`go test`, `go vet`), and sync project docs/state before commit.
 - P#55 [DONE]: Add config hot reload via `SIGHUP` with full runtime swap (all config options), strict pre-apply validation, rollback to last working runtime on apply error, and tests for valid/invalid reload plus add/remove metric and collector changes.
+- P#56 [DONE]: Clear all tables in runtime metrics DB, restart latest agent release for 24h contour (`scrape=10s`, `send=60s`, `pprof=on`), and verify clean start health.
+- P#57 [DONE]: Audit `docs/README.md` for semantic duplicates and spelling, apply wording cleanup, and commit docs-only fix.
+- P#58 [DONE]: Free disk pressure by wiping `/root/project/magent/var` runtime artifacts and truncating ClickHouse `system.text_log`, then verify sizes.
+- P#59 [DONE]: Clean Go local caches (`go-build` + old downloaded toolchains), then verify reclaimed disk space.
+- P#60 [DONE]: Full codebase audit by checklist: correctness, fault tolerance, perf/memory, duplication, testing gaps, and docs drift; returned prioritized findings with actionable fix plan.
+- P#61 [DONE]: Applied audit fixes: sender lifecycle close on stop/reload, Prometheus duplicate-series aggregation policy, docs alignment (`process key`, `kernel`, `queue.dir`), and targeted worker-builder dedup with regression tests (`go test ./...`, `go test -race ./...`).

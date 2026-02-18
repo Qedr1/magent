@@ -63,6 +63,21 @@ type pushWorkerRuntime struct {
 	dropCondition []DropCondition
 }
 
+type pullWorkerBuildSpec struct {
+	Metric      string
+	Instance    string
+	ScrapeEvery time.Duration
+	SendEvery   time.Duration
+	Percentiles []int
+	Collector   metrics.Collector
+	Tags        EventTags
+	EmitFilter  EmitFilter
+	KeepKnown   bool
+	DropVar     []string
+	FilterVar   []string
+	DropEvent   []DropCondition
+}
+
 // NewFromConfig builds metric workers for configured metrics.
 // Params: cfg validated runtime config; logger initialized logger.
 // Returns: engine with active workers or error.
@@ -197,6 +212,30 @@ func appendMetricWorkers(runners []runner, workers []*metricWorker) []runner {
 	return runners
 }
 
+// buildPullMetricWorker builds one pull worker from shared runtime fields.
+// Params: spec unified pull-worker settings; sink/logger runtime deps.
+// Returns: initialized metric worker or error.
+func buildPullMetricWorker(spec pullWorkerBuildSpec, sink Sink, logger *slog.Logger) (*metricWorker, error) {
+	return newMetricWorker(
+		WorkerConfig{
+			Metric:      spec.Metric,
+			Instance:    spec.Instance,
+			ScrapeEvery: spec.ScrapeEvery,
+			SendEvery:   spec.SendEvery,
+			Percentiles: spec.Percentiles,
+			Collector:   spec.Collector,
+			Tags:        spec.Tags,
+			EmitFilter:  spec.EmitFilter,
+			KeepKnown:   spec.KeepKnown,
+			DropVar:     spec.DropVar,
+			FilterVar:   spec.FilterVar,
+			DropEvent:   spec.DropEvent,
+		},
+		sink,
+		logger,
+	)
+}
+
 // Run starts all workers and waits for context cancellation.
 // Params: ctx lifecycle context.
 // Returns: nil on graceful stop.
@@ -256,8 +295,8 @@ func buildWorkersForMetric(
 			return nil, fmt.Errorf("build %s worker[%d]: %w", strings.ToLower(metricName), idx, err)
 		}
 
-		worker, err := newMetricWorker(
-			WorkerConfig{
+		worker, err := buildPullMetricWorker(
+			pullWorkerBuildSpec{
 				Metric:      metricName,
 				Instance:    resolved.instance,
 				ScrapeEvery: resolved.scrapeEvery,
@@ -321,8 +360,8 @@ func buildProcessWorkers(
 			return nil, fmt.Errorf("build process worker[%d]: %w", idx, err)
 		}
 
-		worker, err := newMetricWorker(
-			WorkerConfig{
+		worker, err := buildPullMetricWorker(
+			pullWorkerBuildSpec{
 				Metric:      "process",
 				Instance:    resolved.instance,
 				ScrapeEvery: resolved.scrapeEvery,
@@ -392,8 +431,8 @@ func buildScriptWorkers(
 				return nil, fmt.Errorf("build script worker %s[%d]: %w", scriptMetric, idx, err)
 			}
 
-			worker, err := newMetricWorker(
-				WorkerConfig{
+			worker, err := buildPullMetricWorker(
+				pullWorkerBuildSpec{
 					Metric:      scriptMetric,
 					Instance:    resolved.instance,
 					ScrapeEvery: resolved.scrapeEvery,

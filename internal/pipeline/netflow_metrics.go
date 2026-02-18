@@ -42,8 +42,8 @@ func buildNetflowWorkers(
 			return nil, fmt.Errorf("build netflow worker[%d]: %w", idx, err)
 		}
 
-		worker, err := newMetricWorker(
-			WorkerConfig{
+		worker, err := buildPullMetricWorker(
+			pullWorkerBuildSpec{
 				Metric:      "netflow",
 				Instance:    resolved.instance,
 				ScrapeEvery: resolved.scrapeEvery,

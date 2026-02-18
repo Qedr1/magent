@@ -122,7 +122,10 @@ func (p *PrometheusParser) Parse(payload string) ([]Point, error) {
 			values = make(map[string]Value)
 			pointsByKey["total"] = values
 		}
-		values[varName] = Value{Raw: value, Kind: KindNumber}
+		current := values[varName]
+		current.Raw += value
+		current.Kind = KindNumber
+		values[varName] = current
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, fmt.Errorf("scan Prometheus payload: %w", err)

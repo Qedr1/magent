@@ -83,6 +83,25 @@ func TestParsePointsPrometheus_LabelValueWithSpaces(t *testing.T) {
 	assertPointValue(t, points, "total", "vector_build_info", 1)
 }
 
+func TestParsePointsPrometheus_DuplicateSeriesSummedByMetricName(t *testing.T) {
+	payload := strings.Join([]string{
+		`# TYPE vector_requests_total counter`,
+		`vector_requests_total{component_id="a"} 10`,
+		`vector_requests_total{component_id="b"} 15`,
+	}, "\n")
+
+	points, err := ParsePointsPrometheus(payload, PrometheusParseConfig{
+		VarMode: PrometheusVarModeFull,
+	})
+	if err != nil {
+		t.Fatalf("ParsePointsPrometheus() error: %v", err)
+	}
+	if len(points) != 1 {
+		t.Fatalf("unexpected point count: got=%d want=1", len(points))
+	}
+	assertPointValue(t, points, "total", "vector_requests_total", 25)
+}
+
 func assertPointValue(t *testing.T, points []Point, key string, varName string, want float64) {
 	t.Helper()
 
