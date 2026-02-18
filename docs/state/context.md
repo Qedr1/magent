@@ -19,7 +19,7 @@ If a detail is not stated here: treat it as unknown and ask the user.
 - Vector configs: `deploy/vector/*` (Vector Protocol v2 receiver + VRL flatten)
 - ClickHouse DDL/scripts: `deploy/clickhouse/*`
 - Tests (bash e2e): `docs/tests/*`
-- Examples: `docs/example/*` (script + built-in netflow + vector monitoring configs)
+- Examples: `docs/example/*` (script + built-in netflow + `http_client` Prometheus vector monitoring configs)
 - Roadmap: `docs/state/detailed_plan.md`; changelog: `docs/state/changelog.md`
 
 ## Architecture/Flow
@@ -34,6 +34,7 @@ MultiSink dispatch is sequential (no goroutine-per-event overhead). CollectorSin
 Collector delivery path:
 - Live in-memory batch uses `SendBatch` fast-path (direct protobuf request build + gRPC push; no intermediate payload decode).
 - Disk queue/retry path keeps encoded payload (`Encode` + `Send`) for durability format compatibility.
+- Runtime supports config hot reload on `SIGHUP`: load+validate new config, full runtime swap (workers/collectors/listeners), rollback to previous working runtime on apply failure; aggregation windows reset after successful swap.
 
 ## Time/Window Semantics
 - `dt` (event time): Unix epoch milliseconds; first sample time in the send window (scrapeAt for pull, ingestAt for push); fallback `sendAt - interval`. Enforced: `dt < dts`.
@@ -211,6 +212,7 @@ Keys are always strings; values are normalized as above.
 ## Ops (Build/Run/Test/E2E)
 - Build: `make build` -> `bin/magent` (prod flags); optional `make build-upx`.
 - Run: `./bin/magent -config <path>` (default config path: `config.toml`).
+- Hot reload: `kill -HUP <magent-pid>` (equivalent to full runtime re-init with validation and rollback policy).
 - Unit checks (2026-02-16): `go test ./...`, `go vet ./...` PASS.
 - E2E scripts:
   - `bash docs/tests/run_agent_vector_clickhouse.sh [db] [table]`
@@ -253,4 +255,4 @@ Known test-script quirks (do not change semantics):
 
 ## Project plan (status snapshot)
 - Detailed roadmap: `docs/state/detailed_plan.md`.
-- Current: P#1..P#20 DONE; P#21 OPEN; P#22..P#28 DONE; P#29 OPEN; P#31 DONE; P#33..P#35 DONE; P#37..P#40 DONE; P#42 OPEN; P#43..P#44 DONE; P#49..P#54 DONE.
+- Current: P#1..P#20 DONE; P#21 OPEN; P#22..P#28 DONE; P#29 OPEN; P#31 DONE; P#33..P#35 DONE; P#37..P#40 DONE; P#42 OPEN; P#43..P#44 DONE; P#49..P#55 DONE.

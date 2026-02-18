@@ -43,7 +43,26 @@ func run() int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	if err := app.Run(ctx, app.Runtime{ConfigPath: configPath}); err != nil {
+	reloadSignal := make(chan os.Signal, 1)
+	signal.Notify(reloadSignal, syscall.SIGHUP)
+	defer signal.Stop(reloadSignal)
+
+	reload := make(chan struct{}, 1)
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-reloadSignal:
+				select {
+				case reload <- struct{}{}:
+				default:
+				}
+			}
+		}
+	}()
+
+	if err := app.Run(ctx, app.Runtime{ConfigPath: configPath, Reload: reload}); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return exitCodeFailure
 	}
