@@ -214,6 +214,8 @@ Keys are always strings; values are normalized as above.
 - Run: `./bin/magent -config <path>` (default config path: `config.toml`).
 - Hot reload: `kill -HUP <magent-pid>` (equivalent to full runtime re-init with validation and rollback policy).
 - Unit checks (2026-02-16): `go test ./...`, `go vet ./...` PASS.
+- Active contour (P#56): previous runtime was stopped, all non-view tables in `metrics` were truncated, runtime queue files were zeroed, then latest built release was started with `/tmp/magent-runtime/magent-10s60s-vector-prom-all.toml` for a 24h run (`START_UTC=2026-02-18 17:43:26`, `END_UTC=2026-02-19 17:43:26`), with startup health checks passed (`process alive`, `pprof 127.0.0.1:6060`, pprof endpoint reachable).
+- Runtime housekeeping (P#58/P#59): cleaned `/root/project/magent/var` runtime artifacts, truncated ClickHouse `system.text_log` (`2.79 GiB -> 0`), cleaned Go caches (`go-build 724 MiB -> 12 KiB`, removed cached `golang.org/toolchain@*`), free disk grew to ~`7.2 GiB` (`85%` used).
 - E2E scripts:
   - `bash docs/tests/run_agent_vector_clickhouse.sh [db] [table]`
   - `bash docs/tests/run_all_metrics_queue_batch.sh [db]`
@@ -255,4 +257,4 @@ Known test-script quirks (do not change semantics):
 
 ## Project plan (status snapshot)
 - Detailed roadmap: `docs/state/detailed_plan.md`.
-- Current: P#1..P#20 DONE; P#21 OPEN; P#22..P#28 DONE; P#29 OPEN; P#31 DONE; P#33..P#35 DONE; P#37..P#40 DONE; P#42 OPEN; P#43..P#44 DONE; P#49..P#55 DONE.
+- Current: P#1..P#20 DONE; P#21 OPEN; P#22..P#28 DONE; P#29 OPEN; P#31 DONE; P#33..P#35 DONE; P#37..P#40 DONE; P#42 OPEN; P#43..P#44 DONE; P#49..P#59 DONE.
