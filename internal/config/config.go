@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -275,12 +277,12 @@ type CollectorBatchConfig struct {
 }
 
 // Load reads, expands, validates, and returns config from path.
-// Params: path to TOML config file.
+// Params: path to TOML config file or directory with *.toml files.
 // Returns: validated config pointer or error.
 func Load(path string) (*Config, error) {
-	raw, err := os.ReadFile(path)
+	raw, err := readConfigSource(path)
 	if err != nil {
-		return nil, fmt.Errorf("read config %q: %w", path, err)
+		return nil, err
 	}
 
 	expanded := os.ExpandEnv(string(raw))
@@ -299,6 +301,67 @@ func Load(path string) (*Config, error) {
 	}
 
 	return &cfg, nil
+}
+
+// readConfigSource reads one TOML file or concatenates *.toml files from directory.
+// Params: path to config file or directory.
+// Returns: raw TOML bytes or error.
+func readConfigSource(path string) ([]byte, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, fmt.Errorf("stat config %q: %w", path, err)
+	}
+
+	if !info.IsDir() {
+		raw, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return nil, fmt.Errorf("read config %q: %w", path, readErr)
+		}
+		return raw, nil
+	}
+
+	return readConfigDir(path)
+}
+
+// readConfigDir concatenates config snippets from one directory.
+// Params: path to directory that contains *.toml files.
+// Returns: concatenated TOML content or error.
+func readConfigDir(path string) ([]byte, error) {
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return nil, fmt.Errorf("read config dir %q: %w", path, err)
+	}
+
+	files := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		if strings.EqualFold(filepath.Ext(entry.Name()), ".toml") {
+			files = append(files, entry.Name())
+		}
+	}
+
+	sort.Strings(files)
+	if len(files) == 0 {
+		return nil, fmt.Errorf("read config dir %q: no *.toml files", path)
+	}
+
+	var builder strings.Builder
+	for _, name := range files {
+		filePath := filepath.Join(path, name)
+		raw, readErr := os.ReadFile(filePath)
+		if readErr != nil {
+			return nil, fmt.Errorf("read config %q: %w", filePath, readErr)
+		}
+		builder.Write(raw)
+		if len(raw) == 0 || raw[len(raw)-1] != '\n' {
+			builder.WriteByte('\n')
+		}
+		builder.WriteByte('\n')
+	}
+
+	return []byte(builder.String()), nil
 }
 
 // applyDefaults fills defaults for optional configuration fields.

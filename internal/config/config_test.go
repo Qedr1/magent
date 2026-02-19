@@ -3,6 +3,7 @@ package config_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -62,6 +63,99 @@ max_events = 100
 	}
 	if got := cfg.DB.ClickHouse.DialTimeout.Duration; got != 5*time.Second {
 		t.Fatalf("unexpected db.clickhouse.dial_timeout default: %v", got)
+	}
+}
+
+// TestLoad_ConfigDirMergesTomlFiles verifies config directory loading and file-order merge.
+// Params: testing.T for assertions.
+// Returns: none.
+func TestLoad_ConfigDirMergesTomlFiles(t *testing.T) {
+	dir := writeConfigDir(t, map[string]string{
+		"00-global.toml": `
+[global]
+dc = "dc-main"
+project = "infra"
+role = "db"
+`,
+		"10-collector.toml": `
+[[collector]]
+addr = ["127.0.0.1:6000"]
+
+[collector.batch]
+max_events = 100
+`,
+		"20-cpu-z.toml": `
+[[metrics.cpu]]
+name = "cpu-z"
+`,
+		"11-cpu-a.toml": `
+[[metrics.cpu]]
+name = "cpu-a"
+`,
+	})
+
+	cfg, err := config.Load(dir)
+	if err != nil {
+		t.Fatalf("load config dir: %v", err)
+	}
+
+	if cfg.Global.DC != "dc-main" {
+		t.Fatalf("unexpected dc: %q", cfg.Global.DC)
+	}
+	if len(cfg.Collector) != 1 {
+		t.Fatalf("unexpected collectors count: %d", len(cfg.Collector))
+	}
+	if len(cfg.Metrics.CPU) != 2 {
+		t.Fatalf("unexpected cpu workers count: %d", len(cfg.Metrics.CPU))
+	}
+	if cfg.Metrics.CPU[0].Name != "cpu-a" || cfg.Metrics.CPU[1].Name != "cpu-z" {
+		t.Fatalf("unexpected cpu worker order: [%q,%q]", cfg.Metrics.CPU[0].Name, cfg.Metrics.CPU[1].Name)
+	}
+}
+
+// TestLoad_ConfigDirRejectsWithoutToml verifies config dir validation on empty/non-toml-only directories.
+// Params: testing.T for assertions.
+// Returns: none.
+func TestLoad_ConfigDirRejectsWithoutToml(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "README.txt"), []byte("not a config"), 0o644); err != nil {
+		t.Fatalf("write non-toml file: %v", err)
+	}
+
+	_, err := config.Load(dir)
+	if err == nil {
+		t.Fatalf("expected error for config dir without *.toml")
+	}
+	if !strings.Contains(err.Error(), "no *.toml files") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+// TestLoad_ConfigDirIgnoresNonToml verifies non-toml files are ignored when valid toml files exist.
+// Params: testing.T for assertions.
+// Returns: none.
+func TestLoad_ConfigDirIgnoresNonToml(t *testing.T) {
+	dir := writeConfigDir(t, map[string]string{
+		"00-global.toml": `
+[global]
+dc = "dc1"
+project = "infra"
+role = "db"
+`,
+		"10-collector.toml": `
+[[collector]]
+addr = ["127.0.0.1:6000"]
+
+[collector.batch]
+max_events = 100
+`,
+		"notes.md": `
+this file should be ignored by config loader
+`,
+	})
+
+	if _, err := config.Load(dir); err != nil {
+		t.Fatalf("expected config dir with non-toml extras to load: %v", err)
 	}
 }
 
@@ -807,4 +901,21 @@ func writeConfig(t *testing.T, body string) string {
 	}
 
 	return path
+}
+
+// writeConfigDir creates a temp config directory populated with provided files.
+// Params: t test handle; files map[name]body.
+// Returns: absolute directory path.
+func writeConfigDir(t *testing.T, files map[string]string) string {
+	t.Helper()
+
+	dir := t.TempDir()
+	for name, body := range files {
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatalf("write config file %q: %v", name, err)
+		}
+	}
+
+	return dir
 }

@@ -53,7 +53,12 @@ Collector delivery path:
 - Encoding guard: outbound Vector integer field is `int64`; any `uint64 > MaxInt64` is rejected at encode time (batch is dropped with error log).
 
 ## Config (TOML; `${VAR}` expanded before decode)
-Load pipeline: read file -> `os.ExpandEnv` -> TOML decode -> defaults -> validation (`internal/config/config.go`).
+Load pipeline: read one file OR merge `*.toml` from config directory (lexicographic by filename) -> `os.ExpandEnv` -> TOML decode -> defaults -> validation (`internal/config/config.go`).
+Config source rules:
+- `-config <file>`: unchanged single-file mode.
+- `-config <dir>`: only `*.toml` are included; non-`.toml` files are ignored.
+- empty dir or no `*.toml` files => load error.
+- duplicate singleton tables across files (`[global]`, `[metrics]`, `[log.*]`, `[pprof]`, `[db.*]`) fail at TOML decode stage.
 
 ### `[global]` (required)
 - required: `dc`, `project`, `role` (non-empty)
@@ -88,6 +93,7 @@ Metrics:
 - `[[metrics.cpu]]` -> metric `cpu`
 - `[[metrics.ram]]` -> `ram`
 - `[[metrics.swap]]` -> `swap`
+- `[[metrics.kernel]]` -> `kernel`
 - `[[metrics.net]]` -> `net`; optional `tcp_cc_top_n` (default `2000`, `0` disables `key=cc:<algo>` point)
 - `[[metrics.netflow]]` -> `netflow` (AF_PACKET raw capture; no cgo)
 - `[[metrics.disk]]` -> `disk`
@@ -103,14 +109,16 @@ Process metric (special):
 Script metrics:
 - `[[metrics.script.<metric_name>]]`:
   - required: `path`; `timeout>0` (default 5s); `env` map (default `{}`)
+  - optional: `format=json|prometheus` (default `json`); `var_mode=full|short` (used only when `format=prometheus`)
   - `<metric_name>` becomes `event.metric` and ClickHouse table name; keep it ClickHouse-safe (recommended: `[a-z][a-z0-9_]*`)
 
 HTTP server metrics (push):
 - `[[metrics.http_server.<metric_name>]]`:
   - required: `listen` (host:port), `path` (starts with `/`)
+  - optional: `format=json|prometheus` (default `json`); `var_mode=full|short` (used only when `format=prometheus`)
   - schedule: only `send` (no `scrape`); `max_pending` (default 4096) limits accepted batches in memory
   - policy on overload: keep old / drop new (HTTP `503`), success returns `204`
-  - accepts `POST` body JSON in the External Metric JSON Contract below
+  - accepts `POST` body in JSON contract or Prometheus text exposition
 
 HTTP client metrics (poll):
 - `[[metrics.http_client.<metric_name>]]`:
@@ -121,14 +129,14 @@ HTTP client metrics (poll):
   - HTTP: `GET` only; non-2xx is scrape error
   - `url` supports placeholders (path-escaped): `{dc},{host},{project},{role},{metric},{instance}`
   - `format=json`: response uses the External Metric JSON Contract below
-  - `format=prometheus`: parse text exposition; only `counter` and `gauge` are ingested; each sample becomes one point (`key="total"`, `var` from metric name); selection is done by worker filters (`filter_var/drop_var/drop_event`)
+  - `format=prometheus`: parse text exposition; only `counter/gauge` with declared `# TYPE` are ingested; `key="total"`; values from multiple series with same metric name (different labels) are summed into one `var` per scrape; selection is done by worker filters (`filter_var/drop_var/drop_event`)
   - external workers (`script/http_client/http_server`) use `KeepKnown=false` (emit only windows with actual samples; no synthetic zero events)
 
 Netflow metric (pull):
 - `[[metrics.netflow]]`:
   - required: `ifaces=[pattern,...]` (wildcards supported, eg `eth*`,`enp*`,`lo`)
   - optional: `top_n` (default 20), `flow_idle_timeout` (default `10s`, UDP flow restart timeout), `scrape`, `send`, worker filters
-  - default aggregation mode: last-only (`percentiles=[]` recommended)
+  - percentile defaults are disabled for netflow (global `[metrics].percentiles` are not inherited); last-only unless worker percentiles are explicitly set
   - runtime privilege: raw packet capture requires `root` or `CAP_NET_RAW`
 
 ### Collectors / Delivery
@@ -158,6 +166,7 @@ Keys are always strings; values are normalized as above.
 - `cpu`: key `total` + `coreN`; var: `util` (%)
 - `ram`: key `total`; vars: `total,used,free` (bytes), `util` (%)
 - `swap`: key `total`; vars: `total,used` (bytes), `util` (%)
+- `kernel`: key `total`; vars: `load1,load5,load15,procs_running,procs_blocked,ctxt_per_sec,intr_per_sec,softirq_per_sec,forks_per_sec`
 - `net`:
   - key `<iface>` vars: `tx_bytes,rx_bytes` (delta bytes), `tx_bytes_per_sec,rx_bytes_per_sec` (bytes/s), `tx_pkt,rx_pkt` (pkt/s), `tx_err,rx_err,tx_drop,rx_drop` (delta counters)
   - key `total` vars (host-level per-scrape deltas): `tcp_active_opens,tcp_passive_opens,tcp_retrans_segs,tcp_timeouts,tcp_out_rsts,udp_in_datagrams,udp_out_datagrams,udp_in_errors,udp_no_ports,udp_rcvbuf_errors,udp_sndbuf_errors`
@@ -206,14 +215,15 @@ Keys are always strings; values are normalized as above.
   - payload: `key,var,agg` (LowCardinality String), `value UInt64`
   - `PARTITION BY toYYYYMMDD(dt)`; `ORDER BY (dt, host, key)`; `TTL dt + INTERVAL 4 MONTH`
 - Bootstrap:
-  - built-ins: `bash deploy/clickhouse/create_builtin_tables.sh <db> "cpu,ram,swap,net,netflow,disk,fs,process"`
+  - built-ins: `bash deploy/clickhouse/create_builtin_tables.sh <db> "cpu,ram,swap,kernel,net,netflow,disk,fs,process"`
   - script metrics use the same DDL: `bash deploy/clickhouse/create_builtin_tables.sh <db> "<metric_name_1,metric_name_2>"`
 
 ## Ops (Build/Run/Test/E2E)
 - Build: `make build` -> `bin/magent` (prod flags); optional `make build-upx`.
-- Run: `./bin/magent -config <path>` (default config path: `config.toml`).
-- Hot reload: `kill -HUP <magent-pid>` (equivalent to full runtime re-init with validation and rollback policy).
+- Run: `./bin/magent -config <path>` where `<path>` is a config file or config directory (default: `config.toml`).
+- Hot reload: `kill -HUP <magent-pid>` (re-reads the same `-config` target file/dir, validates, then full runtime re-init with rollback policy).
 - Unit checks (2026-02-16): `go test ./...`, `go vet ./...` PASS.
+- P#62 checks (2026-02-19): `go test ./...` PASS after adding config-dir loader and tests.
 - Active contour (P#56): previous runtime was stopped, all non-view tables in `metrics` were truncated, runtime queue files were zeroed, then latest built release was started with `/tmp/magent-runtime/magent-10s60s-vector-prom-all.toml` for a 24h run (`START_UTC=2026-02-18 17:43:26`, `END_UTC=2026-02-19 17:43:26`), with startup health checks passed (`process alive`, `pprof 127.0.0.1:6060`, pprof endpoint reachable).
 - Runtime housekeeping (P#58/P#59): cleaned `/root/project/magent/var` runtime artifacts, truncated ClickHouse `system.text_log` (`2.79 GiB -> 0`), cleaned Go caches (`go-build 724 MiB -> 12 KiB`, removed cached `golang.org/toolchain@*`), free disk grew to ~`7.2 GiB` (`85%` used).
 - E2E scripts:
@@ -257,4 +267,4 @@ Known test-script quirks (do not change semantics):
 
 ## Project plan (status snapshot)
 - Detailed roadmap: `docs/state/detailed_plan.md`.
-- Current: P#1..P#20 DONE; P#21 OPEN; P#22..P#28 DONE; P#29 OPEN; P#31 DONE; P#33..P#35 DONE; P#37..P#40 DONE; P#42 OPEN; P#43..P#44 DONE; P#49..P#59 DONE.
+- Current: P#1..P#20 DONE; P#21 OPEN; P#22..P#28 DONE; P#29 OPEN; P#31 DONE; P#33..P#35 DONE; P#37..P#40 DONE; P#42 OPEN; P#43..P#44 DONE; P#49..P#62 DONE.

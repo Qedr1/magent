@@ -56,3 +56,4 @@ Status rules: `OPEN` by default; set to `DONE` only after user OK + tests pass; 
 - P#59 [DONE]: Clean Go local caches (`go-build` + old downloaded toolchains), then verify reclaimed disk space.
 - P#60 [DONE]: Full codebase audit by checklist: correctness, fault tolerance, perf/memory, duplication, testing gaps, and docs drift; returned prioritized findings with actionable fix plan.
 - P#61 [DONE]: Applied audit fixes: sender lifecycle close on stop/reload, Prometheus duplicate-series aggregation policy, docs alignment (`process key`, `kernel`, `queue.dir`), and targeted worker-builder dedup with regression tests (`go test ./...`, `go test -race ./...`).
+- P#62 [DONE]: Add `-config` directory mode (`*.toml` merge with lexical order), keep file-mode compatibility, cover with config loader tests, and sync README/example config notes.
