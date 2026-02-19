@@ -55,30 +55,34 @@ func (w *window) appendPoints(points []metrics.Point) bool {
 			key = "total"
 		}
 
-		if _, ok := w.buffer[key]; !ok {
-			w.buffer[key] = make(map[string]*series)
-		}
-		if _, ok := w.known[key]; !ok {
-			w.known[key] = make(map[string]metrics.ValueKind)
-		}
-
 		for varName, value := range point.Values {
 			valueName := strings.TrimSpace(varName)
 			if valueName == "" {
 				continue
 			}
-				if !isVariableAllowedCompiled(valueName, w.filterVarPatterns, w.dropVarPatterns) {
-					continue
-				}
+			if !isVariableAllowedCompiled(valueName, w.filterVarPatterns, w.dropVarPatterns) {
+				continue
+			}
 
-			seriesBuffer, ok := w.buffer[key][valueName]
+			keyBuffer, ok := w.buffer[key]
+			if !ok {
+				keyBuffer = make(map[string]*series)
+				w.buffer[key] = keyBuffer
+			}
+			keyKnown, ok := w.known[key]
+			if !ok {
+				keyKnown = make(map[string]metrics.ValueKind)
+				w.known[key] = keyKnown
+			}
+
+			seriesBuffer, ok := keyBuffer[valueName]
 			if !ok {
 				seriesBuffer = &series{kind: value.Kind}
-				w.buffer[key][valueName] = seriesBuffer
+				keyBuffer[valueName] = seriesBuffer
 			}
 			seriesBuffer.kind = value.Kind
 			seriesBuffer.values = append(seriesBuffer.values, value.Raw)
-			w.known[key][valueName] = value.Kind
+			keyKnown[valueName] = value.Kind
 			appended = true
 		}
 	}

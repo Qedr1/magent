@@ -63,19 +63,30 @@ type pushWorkerRuntime struct {
 	dropCondition []DropCondition
 }
 
-type pullWorkerBuildSpec struct {
-	Metric      string
-	Instance    string
-	ScrapeEvery time.Duration
-	SendEvery   time.Duration
-	Percentiles []int
-	Collector   metrics.Collector
-	Tags        EventTags
-	EmitFilter  EmitFilter
-	KeepKnown   bool
-	DropVar     []string
-	FilterVar   []string
-	DropEvent   []DropCondition
+type pullWorkerRuntimeSpec struct {
+	metric              string
+	index               int
+	instancePrefix      string
+	name                string
+	defaultScrape       time.Duration
+	overrideScrape      time.Duration
+	defaultSend         time.Duration
+	overrideSend        time.Duration
+	defaultPercentiles  []int
+	overridePercentiles []int
+	dropEvent           []string
+}
+
+// sortedMetricNames returns lexicographically sorted names from map keys.
+// Params: definitions map keyed by metric name.
+// Returns: sorted metric name list.
+func sortedMetricNames[T any](definitions map[string][]T) []string {
+	names := make([]string, 0, len(definitions))
+	for name := range definitions {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // NewFromConfig builds metric workers for configured metrics.
@@ -212,28 +223,40 @@ func appendMetricWorkers(runners []runner, workers []*metricWorker) []runner {
 	return runners
 }
 
-// buildPullMetricWorker builds one pull worker from shared runtime fields.
-// Params: spec unified pull-worker settings; sink/logger runtime deps.
+// buildResolvedPullWorker resolves runtime schedules/drop rules and builds one pull worker.
+// Params: runtime worker runtime inputs; cfg base worker config; sink/logger runtime deps.
 // Returns: initialized metric worker or error.
-func buildPullMetricWorker(spec pullWorkerBuildSpec, sink Sink, logger *slog.Logger) (*metricWorker, error) {
-	return newMetricWorker(
-		WorkerConfig{
-			Metric:      spec.Metric,
-			Instance:    spec.Instance,
-			ScrapeEvery: spec.ScrapeEvery,
-			SendEvery:   spec.SendEvery,
-			Percentiles: spec.Percentiles,
-			Collector:   spec.Collector,
-			Tags:        spec.Tags,
-			EmitFilter:  spec.EmitFilter,
-			KeepKnown:   spec.KeepKnown,
-			DropVar:     spec.DropVar,
-			FilterVar:   spec.FilterVar,
-			DropEvent:   spec.DropEvent,
-		},
-		sink,
+func buildResolvedPullWorker(
+	runtime pullWorkerRuntimeSpec,
+	cfg WorkerConfig,
+	sink Sink,
+	logger *slog.Logger,
+) (*metricWorker, error) {
+	resolved, err := resolvePullWorkerRuntime(
 		logger,
+		runtime.metric,
+		runtime.index,
+		runtime.instancePrefix,
+		runtime.name,
+		runtime.defaultScrape,
+		runtime.overrideScrape,
+		runtime.defaultSend,
+		runtime.overrideSend,
+		runtime.defaultPercentiles,
+		runtime.overridePercentiles,
+		runtime.dropEvent,
 	)
+	if err != nil {
+		return nil, err
+	}
+
+	cfg.Instance = resolved.instance
+	cfg.ScrapeEvery = resolved.scrapeEvery
+	cfg.SendEvery = resolved.sendEvery
+	cfg.Percentiles = resolved.percentiles
+	cfg.DropEvent = resolved.dropCondition
+
+	return newMetricWorker(cfg, sink, logger)
 }
 
 // Run starts all workers and waits for context cancellation.
@@ -277,37 +300,27 @@ func buildWorkersForMetric(
 ) ([]*metricWorker, error) {
 	out := make([]*metricWorker, 0, len(definitions))
 	for idx, definition := range definitions {
-		resolved, err := resolvePullWorkerRuntime(
-			logger,
-			metricName,
-			idx,
-			strings.ToLower(metricName),
-			definition.Name,
-			defaults.Scrape.Duration,
-			definition.Scrape.Duration,
-			defaults.Send.Duration,
-			definition.Send.Duration,
-			defaults.Percentiles,
-			definition.Percentiles,
-			definition.DropEvent,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("build %s worker[%d]: %w", strings.ToLower(metricName), idx, err)
-		}
-
-		worker, err := buildPullMetricWorker(
-			pullWorkerBuildSpec{
-				Metric:      metricName,
-				Instance:    resolved.instance,
-				ScrapeEvery: resolved.scrapeEvery,
-				SendEvery:   resolved.sendEvery,
-				Percentiles: resolved.percentiles,
-				Collector:   factory(definition),
-				Tags:        tags,
-				KeepKnown:   true,
-				DropVar:     definition.DropVar,
-				FilterVar:   definition.FilterVar,
-				DropEvent:   resolved.dropCondition,
+		worker, err := buildResolvedPullWorker(
+			pullWorkerRuntimeSpec{
+				metric:              metricName,
+				index:               idx,
+				instancePrefix:      strings.ToLower(metricName),
+				name:                definition.Name,
+				defaultScrape:       defaults.Scrape.Duration,
+				overrideScrape:      definition.Scrape.Duration,
+				defaultSend:         defaults.Send.Duration,
+				overrideSend:        definition.Send.Duration,
+				defaultPercentiles:  defaults.Percentiles,
+				overridePercentiles: definition.Percentiles,
+				dropEvent:           definition.DropEvent,
+			},
+			WorkerConfig{
+				Metric:    metricName,
+				Collector: factory(definition),
+				Tags:      tags,
+				KeepKnown: true,
+				DropVar:   definition.DropVar,
+				FilterVar: definition.FilterVar,
 			},
 			sink,
 			logger,
@@ -342,38 +355,28 @@ func buildProcessWorkers(
 			continue
 		}
 
-		resolved, err := resolvePullWorkerRuntime(
-			logger,
-			"process",
-			idx,
-			"process",
-			definition.Name,
-			defaultProcessScrapeEvery,
-			definition.Scrape.Duration,
-			cfg.Metrics.Send.Duration,
-			definition.Send.Duration,
-			cfg.Metrics.Percentiles,
-			definition.Percentiles,
-			definition.DropEvent,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("build process worker[%d]: %w", idx, err)
-		}
-
-		worker, err := buildPullMetricWorker(
-			pullWorkerBuildSpec{
-				Metric:      "process",
-				Instance:    resolved.instance,
-				ScrapeEvery: resolved.scrapeEvery,
-				SendEvery:   resolved.sendEvery,
-				Percentiles: resolved.percentiles,
-				Collector:   metrics.NewPROCESSCollector("process"),
-				Tags:        tags,
-				EmitFilter:  processEmitFilter(definition),
-				KeepKnown:   false,
-				DropVar:     definition.DropVar,
-				FilterVar:   definition.FilterVar,
-				DropEvent:   resolved.dropCondition,
+		worker, err := buildResolvedPullWorker(
+			pullWorkerRuntimeSpec{
+				metric:              "process",
+				index:               idx,
+				instancePrefix:      "process",
+				name:                definition.Name,
+				defaultScrape:       defaultProcessScrapeEvery,
+				overrideScrape:      definition.Scrape.Duration,
+				defaultSend:         cfg.Metrics.Send.Duration,
+				overrideSend:        definition.Send.Duration,
+				defaultPercentiles:  cfg.Metrics.Percentiles,
+				overridePercentiles: definition.Percentiles,
+				dropEvent:           definition.DropEvent,
+			},
+			WorkerConfig{
+				Metric:     "process",
+				Collector:  metrics.NewPROCESSCollector("process"),
+				Tags:       tags,
+				EmitFilter: processEmitFilter(definition),
+				KeepKnown:  false,
+				DropVar:    definition.DropVar,
+				FilterVar:  definition.FilterVar,
 			},
 			sink,
 			logger,
@@ -401,11 +404,7 @@ func buildScriptWorkers(
 		return nil, nil
 	}
 
-	scriptNames := make([]string, 0, len(cfg.Metrics.Script))
-	for scriptName := range cfg.Metrics.Script {
-		scriptNames = append(scriptNames, scriptName)
-	}
-	sort.Strings(scriptNames)
+	scriptNames := sortedMetricNames(cfg.Metrics.Script)
 
 	out := make([]*metricWorker, 0)
 	for _, scriptName := range scriptNames {
@@ -413,31 +412,22 @@ func buildScriptWorkers(
 		definitions := cfg.Metrics.Script[scriptName]
 
 		for idx, definition := range definitions {
-			resolved, err := resolvePullWorkerRuntime(
-				logger,
-				scriptMetric,
-				idx,
-				scriptMetric,
-				definition.Name,
-				cfg.Metrics.Scrape.Duration,
-				definition.Scrape.Duration,
-				cfg.Metrics.Send.Duration,
-				definition.Send.Duration,
-				cfg.Metrics.Percentiles,
-				definition.Percentiles,
-				definition.DropEvent,
-			)
-			if err != nil {
-				return nil, fmt.Errorf("build script worker %s[%d]: %w", scriptMetric, idx, err)
-			}
-
-			worker, err := buildPullMetricWorker(
-				pullWorkerBuildSpec{
-					Metric:      scriptMetric,
-					Instance:    resolved.instance,
-					ScrapeEvery: resolved.scrapeEvery,
-					SendEvery:   resolved.sendEvery,
-					Percentiles: resolved.percentiles,
+			worker, err := buildResolvedPullWorker(
+				pullWorkerRuntimeSpec{
+					metric:              scriptMetric,
+					index:               idx,
+					instancePrefix:      scriptMetric,
+					name:                definition.Name,
+					defaultScrape:       cfg.Metrics.Scrape.Duration,
+					overrideScrape:      definition.Scrape.Duration,
+					defaultSend:         cfg.Metrics.Send.Duration,
+					overrideSend:        definition.Send.Duration,
+					defaultPercentiles:  cfg.Metrics.Percentiles,
+					overridePercentiles: definition.Percentiles,
+					dropEvent:           definition.DropEvent,
+				},
+				WorkerConfig{
+					Metric: scriptMetric,
 					Collector: metrics.NewScriptCollector(
 						scriptMetric,
 						definition.Path,
@@ -452,7 +442,6 @@ func buildScriptWorkers(
 					KeepKnown: false,
 					DropVar:   definition.DropVar,
 					FilterVar: definition.FilterVar,
-					DropEvent: resolved.dropCondition,
 				},
 				sink,
 				logger,

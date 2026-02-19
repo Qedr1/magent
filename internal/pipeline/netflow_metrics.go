@@ -24,31 +24,22 @@ func buildNetflowWorkers(
 
 	out := make([]*metricWorker, 0, len(definitions))
 	for idx, definition := range definitions {
-		resolved, err := resolvePullWorkerRuntime(
-			logger,
-			"netflow",
-			idx,
-			"netflow",
-			definition.Name,
-			cfg.Metrics.Scrape.Duration,
-			definition.Scrape.Duration,
-			cfg.Metrics.Send.Duration,
-			definition.Send.Duration,
-			nil,
-			definition.Percentiles,
-			definition.DropEvent,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("build netflow worker[%d]: %w", idx, err)
-		}
-
-		worker, err := buildPullMetricWorker(
-			pullWorkerBuildSpec{
-				Metric:      "netflow",
-				Instance:    resolved.instance,
-				ScrapeEvery: resolved.scrapeEvery,
-				SendEvery:   resolved.sendEvery,
-				Percentiles: resolved.percentiles,
+		worker, err := buildResolvedPullWorker(
+			pullWorkerRuntimeSpec{
+				metric:              "netflow",
+				index:               idx,
+				instancePrefix:      "netflow",
+				name:                definition.Name,
+				defaultScrape:       cfg.Metrics.Scrape.Duration,
+				overrideScrape:      definition.Scrape.Duration,
+				defaultSend:         cfg.Metrics.Send.Duration,
+				overrideSend:        definition.Send.Duration,
+				defaultPercentiles:  nil,
+				overridePercentiles: definition.Percentiles,
+				dropEvent:           definition.DropEvent,
+			},
+			WorkerConfig{
+				Metric: "netflow",
 				Collector: metrics.NewNETFLOWCollector(
 					"netflow",
 					definition.Ifaces,
@@ -59,7 +50,6 @@ func buildNetflowWorkers(
 				KeepKnown: false,
 				DropVar:   definition.DropVar,
 				FilterVar: definition.FilterVar,
-				DropEvent: resolved.dropCondition,
 			},
 			sink,
 			logger,

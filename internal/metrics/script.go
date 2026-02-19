@@ -58,7 +58,7 @@ type ScriptCollector struct {
 	timeout    time.Duration
 	commandEnv []string
 	format     string
-	promCfg    PrometheusParseConfig
+	prometheus *PrometheusParser
 }
 
 // NewScriptCollector creates a SCRIPT collector.
@@ -86,9 +86,9 @@ func NewScriptCollector(
 		timeout:    timeout,
 		commandEnv: mergeEnvironment(env),
 		format:     format,
-		promCfg: PrometheusParseConfig{
+		prometheus: NewPrometheusParser(PrometheusParseConfig{
 			VarMode: varMode,
-		},
+		}),
 	}
 }
 
@@ -131,7 +131,13 @@ func (c *ScriptCollector) Scrape(ctx context.Context) ([]Point, error) {
 		return nil, fmt.Errorf("run script %q: %w (stderr: %s)", c.path, err, stderrText)
 	}
 
-	points, err := parseScriptPoints(stdout.Bytes(), c.format, c.promCfg)
+	var points []Point
+	switch c.format {
+	case "prometheus":
+		points, err = c.prometheus.ParseFromReader(bytes.NewReader(stdout.Bytes()))
+	default:
+		points, err = ParsePointsJSON(stdout.Bytes())
+	}
 	if err != nil {
 		return nil, fmt.Errorf("parse script %q stdout: %w", c.path, err)
 	}

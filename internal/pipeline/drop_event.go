@@ -63,10 +63,10 @@ func parseDropCondition(expression string) (DropCondition, error) {
 	}
 
 	condition := DropCondition{
-		Raw:   raw,
-		Field: field,
-		Op:    op,
-		Value: value,
+		Raw:        raw,
+		Field:      field,
+		Op:         op,
+		Value:      value,
 		valueIsNum: false,
 	}
 
@@ -213,13 +213,6 @@ func splitCondition(raw string) (string, conditionOperator, string, bool) {
 		return field, op, value, true
 	}
 	return "", "", "", false
-}
-
-// wildcardMatch evaluates '*' wildcard pattern against value.
-// Params: pattern may contain '*' wildcards; value is compared text.
-// Returns: true on pattern match.
-func wildcardMatch(pattern, value string) bool {
-	return match.WildcardMatch(pattern, value)
 }
 
 // toFloat64 converts numeric values into float64.

@@ -300,36 +300,33 @@ func (w *collectorWorker) flushBatch(ctx context.Context) {
 // Params: ctx lifecycle context; events batch payload.
 // Returns: nil on first successful send, error when all addresses fail.
 func (w *collectorWorker) sendBatchWithFailover(ctx context.Context, events []Event) error {
-	var (
-		lastErr error
+	return w.sendWithFailoverFunc(
+		ctx,
+		func(sendCtx context.Context, address string) error {
+			return w.sender.SendBatch(sendCtx, address, events, w.cfg.Timeout.Duration)
+		},
 	)
-
-	for _, address := range w.cfg.Addr {
-		addressValue := strings.TrimSpace(address)
-		if addressValue == "" {
-			continue
-		}
-
-		sendCtx, cancel := context.WithTimeout(ctx, w.cfg.Timeout.Duration)
-		err := w.sender.SendBatch(sendCtx, addressValue, events, w.cfg.Timeout.Duration)
-		cancel()
-		if err == nil {
-			return nil
-		}
-		lastErr = err
-		w.logger.Warn("send attempt failed", slog.String("address", addressValue), slog.String("error", err.Error()))
-	}
-
-	if lastErr == nil {
-		return fmt.Errorf("no collector addresses configured")
-	}
-	return lastErr
 }
 
 // sendWithFailover attempts payload delivery to collector addresses in order.
 // Params: ctx lifecycle context; payload encoded batch.
 // Returns: nil on first successful send, error when all addresses fail.
 func (w *collectorWorker) sendWithFailover(ctx context.Context, payload []byte) error {
+	return w.sendWithFailoverFunc(
+		ctx,
+		func(sendCtx context.Context, address string) error {
+			return w.sender.Send(sendCtx, address, payload, w.cfg.Timeout.Duration)
+		},
+	)
+}
+
+// sendWithFailoverFunc attempts delivery to collector addresses in order via provided callback.
+// Params: ctx lifecycle context; sendOne callback for one address.
+// Returns: nil on first successful send, error when all addresses fail.
+func (w *collectorWorker) sendWithFailoverFunc(
+	ctx context.Context,
+	sendOne func(context.Context, string) error,
+) error {
 	var (
 		lastErr error
 	)
@@ -341,7 +338,7 @@ func (w *collectorWorker) sendWithFailover(ctx context.Context, payload []byte) 
 		}
 
 		sendCtx, cancel := context.WithTimeout(ctx, w.cfg.Timeout.Duration)
-		err := w.sender.Send(sendCtx, addressValue, payload, w.cfg.Timeout.Duration)
+		err := sendOne(sendCtx, addressValue)
 		cancel()
 		if err == nil {
 			return nil

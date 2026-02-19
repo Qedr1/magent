@@ -419,29 +419,9 @@ func (c *Config) applyDefaults() error {
 		c.Pprof.Listen = defaultPprofListen
 	}
 
-	for scriptName := range c.Metrics.Script {
-		workers := c.Metrics.Script[scriptName]
-		for idx := range workers {
-			applyScriptWorkerDefaults(&workers[idx])
-		}
-		c.Metrics.Script[scriptName] = workers
-	}
-
-	for metricName := range c.Metrics.HTTPServer {
-		workers := c.Metrics.HTTPServer[metricName]
-		for idx := range workers {
-			applyHTTPServerWorkerDefaults(&workers[idx])
-		}
-		c.Metrics.HTTPServer[metricName] = workers
-	}
-
-	for metricName := range c.Metrics.HTTPClient {
-		workers := c.Metrics.HTTPClient[metricName]
-		for idx := range workers {
-			applyHTTPClientWorkerDefaults(&workers[idx])
-		}
-		c.Metrics.HTTPClient[metricName] = workers
-	}
+	applyNamedWorkerDefaults(c.Metrics.Script, applyScriptWorkerDefaults)
+	applyNamedWorkerDefaults(c.Metrics.HTTPServer, applyHTTPServerWorkerDefaults)
+	applyNamedWorkerDefaults(c.Metrics.HTTPClient, applyHTTPClientWorkerDefaults)
 
 	for idx := range c.Metrics.Netflow {
 		if c.Metrics.Netflow[idx].TopN == 0 {
@@ -651,6 +631,19 @@ func normalizeExternalMetricFormatVarMode(format string, varMode string) (string
 	return normalizedFormat, normalizedVarMode
 }
 
+// applyNamedWorkerDefaults applies per-worker defaults across all named metric groups.
+// Params: workers map grouped by metric name; apply callback for one worker config pointer.
+// Returns: none.
+func applyNamedWorkerDefaults[T any](workers map[string][]T, apply func(*T)) {
+	for metricName := range workers {
+		metricWorkers := workers[metricName]
+		for idx := range metricWorkers {
+			apply(&metricWorkers[idx])
+		}
+		workers[metricName] = metricWorkers
+	}
+}
+
 // applyScriptWorkerDefaults applies defaults shared by script workers.
 // Params: worker script worker config pointer.
 // Returns: none.
@@ -824,18 +817,39 @@ func validateProcessWorkers(path string, workers []ProcessWorkerConfig) error {
 	return nil
 }
 
+// validateNamedWorkers validates worker definitions grouped by metric name.
+// Params: path config path prefix; workers metric-grouped definitions; emptyNameError suffix for empty metric name.
+// Returns: validation error from name checks or callback.
+func validateNamedWorkers[T any](
+	path string,
+	workers map[string][]T,
+	emptyNameError string,
+	validate func(workerPath string, worker T) error,
+) error {
+	for metricName, definitions := range workers {
+		metric := strings.TrimSpace(metricName)
+		if metric == "" {
+			return fmt.Errorf("%s %s", path, emptyNameError)
+		}
+		for idx, worker := range definitions {
+			workerPath := fmt.Sprintf("%s.%s[%d]", path, metric, idx)
+			if err := validate(workerPath, worker); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 // validateScriptWorkers validates script worker sections and command fields.
 // Params: path is config path; workers are script workers grouped by metric name.
 // Returns: validation error for invalid values.
 func validateScriptWorkers(path string, workers map[string][]ScriptWorkerConfig) error {
-	for scriptName, definitions := range workers {
-		scriptMetric := strings.TrimSpace(scriptName)
-		if scriptMetric == "" {
-			return fmt.Errorf("%s contains empty script metric name", path)
-		}
-
-		for idx, worker := range definitions {
-			workerPath := fmt.Sprintf("%s.%s[%d]", path, scriptMetric, idx)
+	return validateNamedWorkers(
+		path,
+		workers,
+		"contains empty script metric name",
+		func(workerPath string, worker ScriptWorkerConfig) error {
 			if err := validateWorkerSchedulePercentiles(
 				workerPath,
 				worker.Scrape.Duration,
@@ -854,30 +868,25 @@ func validateScriptWorkers(path string, workers map[string][]ScriptWorkerConfig)
 			if err := validateExternalMetricFormat(workerPath, worker.Format, worker.VarMode); err != nil {
 				return err
 			}
-
 			for envKey := range worker.Env {
 				if strings.TrimSpace(envKey) == "" {
 					return fmt.Errorf("%s.env contains empty key", workerPath)
 				}
 			}
-		}
-	}
-
-	return nil
+			return nil
+		},
+	)
 }
 
 // validateHTTPServerWorkers validates HTTP server worker sections and endpoint fields.
 // Params: path is config path; workers are definitions grouped by metric name.
 // Returns: validation error for invalid values.
 func validateHTTPServerWorkers(path string, workers map[string][]HTTPServerWorkerConfig) error {
-	for metricName, definitions := range workers {
-		metric := strings.TrimSpace(metricName)
-		if metric == "" {
-			return fmt.Errorf("%s contains empty metric name", path)
-		}
-
-		for idx, worker := range definitions {
-			workerPath := fmt.Sprintf("%s.%s[%d]", path, metric, idx)
+	return validateNamedWorkers(
+		path,
+		workers,
+		"contains empty metric name",
+		func(workerPath string, worker HTTPServerWorkerConfig) error {
 			if err := validateWorkerSchedulePercentiles(
 				workerPath,
 				0,
@@ -887,45 +896,35 @@ func validateHTTPServerWorkers(path string, workers map[string][]HTTPServerWorke
 			); err != nil {
 				return err
 			}
-
 			if strings.TrimSpace(worker.Listen) == "" {
 				return fmt.Errorf("%s.listen is required", workerPath)
 			}
 			if _, _, err := net.SplitHostPort(worker.Listen); err != nil {
 				return fmt.Errorf("%s.listen must be host:port: %w", workerPath, err)
 			}
-
 			if strings.TrimSpace(worker.Path) == "" {
 				return fmt.Errorf("%s.path is required", workerPath)
 			}
 			if !strings.HasPrefix(worker.Path, "/") {
 				return fmt.Errorf("%s.path must start with /", workerPath)
 			}
-
 			if worker.MaxPending == 0 {
 				return fmt.Errorf("%s.max_pending must be > 0", workerPath)
 			}
-			if err := validateExternalMetricFormat(workerPath, worker.Format, worker.VarMode); err != nil {
-				return err
-			}
-		}
-	}
-
-	return nil
+			return validateExternalMetricFormat(workerPath, worker.Format, worker.VarMode)
+		},
+	)
 }
 
 // validateHTTPClientWorkers validates HTTP client worker sections and request fields.
 // Params: path is config path; workers are definitions grouped by metric name.
 // Returns: validation error for invalid values.
 func validateHTTPClientWorkers(path string, workers map[string][]HTTPClientWorkerConfig) error {
-	for metricName, definitions := range workers {
-		metric := strings.TrimSpace(metricName)
-		if metric == "" {
-			return fmt.Errorf("%s contains empty metric name", path)
-		}
-
-		for idx, worker := range definitions {
-			workerPath := fmt.Sprintf("%s.%s[%d]", path, metric, idx)
+	return validateNamedWorkers(
+		path,
+		workers,
+		"contains empty metric name",
+		func(workerPath string, worker HTTPClientWorkerConfig) error {
 			if err := validateWorkerSchedulePercentiles(
 				workerPath,
 				worker.Scrape.Duration,
@@ -941,13 +940,9 @@ func validateHTTPClientWorkers(path string, workers map[string][]HTTPClientWorke
 			if strings.TrimSpace(worker.URL) == "" {
 				return fmt.Errorf("%s.url is required", workerPath)
 			}
-			if err := validateExternalMetricFormat(workerPath, worker.Format, worker.VarMode); err != nil {
-				return err
-			}
-		}
-	}
-
-	return nil
+			return validateExternalMetricFormat(workerPath, worker.Format, worker.VarMode)
+		},
+	)
 }
 
 // validateExternalMetricFormat validates shared json/prometheus format options.

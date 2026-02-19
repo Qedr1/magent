@@ -5,7 +5,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
-	"sort"
 	"strings"
 	"time"
 
@@ -26,11 +25,7 @@ func buildHTTPClientWorkers(
 		return nil, nil
 	}
 
-	metricNames := make([]string, 0, len(cfg.Metrics.HTTPClient))
-	for name := range cfg.Metrics.HTTPClient {
-		metricNames = append(metricNames, name)
-	}
-	sort.Strings(metricNames)
+	metricNames := sortedMetricNames(cfg.Metrics.HTTPClient)
 
 	out := make([]*metricWorker, 0)
 	for _, metricName := range metricNames {
@@ -38,32 +33,23 @@ func buildHTTPClientWorkers(
 		definitions := cfg.Metrics.HTTPClient[metricName]
 
 		for idx, definition := range definitions {
-			resolved, err := resolvePullWorkerRuntime(
-				logger,
-				metric,
-				idx,
-				metric,
-				definition.Name,
-				cfg.Metrics.Scrape.Duration,
-				definition.Scrape.Duration,
-				cfg.Metrics.Send.Duration,
-				definition.Send.Duration,
-				cfg.Metrics.Percentiles,
-				definition.Percentiles,
-				definition.DropEvent,
-			)
-			if err != nil {
-				return nil, fmt.Errorf("build http_client worker %s[%d]: %w", metric, idx, err)
-			}
-
-			resolvedURL := expandURLTemplate(definition.URL, tags, metric, resolved.instance)
-			worker, err := buildPullMetricWorker(
-				pullWorkerBuildSpec{
-					Metric:      metric,
-					Instance:    resolved.instance,
-					ScrapeEvery: resolved.scrapeEvery,
-					SendEvery:   resolved.sendEvery,
-					Percentiles: resolved.percentiles,
+			resolvedURL := expandURLTemplate(definition.URL, tags, metric, defaultWorkerInstance(definition.Name, metric, idx))
+			worker, err := buildResolvedPullWorker(
+				pullWorkerRuntimeSpec{
+					metric:              metric,
+					index:               idx,
+					instancePrefix:      metric,
+					name:                definition.Name,
+					defaultScrape:       cfg.Metrics.Scrape.Duration,
+					overrideScrape:      definition.Scrape.Duration,
+					defaultSend:         cfg.Metrics.Send.Duration,
+					overrideSend:        definition.Send.Duration,
+					defaultPercentiles:  cfg.Metrics.Percentiles,
+					overridePercentiles: definition.Percentiles,
+					dropEvent:           definition.DropEvent,
+				},
+				WorkerConfig{
+					Metric: metric,
 					Collector: metrics.NewHTTPClientCollector(
 						metric,
 						resolvedURL,
@@ -77,7 +63,6 @@ func buildHTTPClientWorkers(
 					KeepKnown: false,
 					DropVar:   definition.DropVar,
 					FilterVar: definition.FilterVar,
-					DropEvent: resolved.dropCondition,
 				},
 				sink,
 				logger,
@@ -106,11 +91,7 @@ func buildHTTPServerRunners(
 		return nil, nil
 	}
 
-	metricNames := make([]string, 0, len(cfg.Metrics.HTTPServer))
-	for name := range cfg.Metrics.HTTPServer {
-		metricNames = append(metricNames, name)
-	}
-	sort.Strings(metricNames)
+	metricNames := sortedMetricNames(cfg.Metrics.HTTPServer)
 
 	type serverGroup struct {
 		mux   *http.ServeMux
@@ -227,8 +208,11 @@ func makeHTTPIngestHandler(
 	if format == "" {
 		format = "json"
 	}
-	promCfg := metrics.PrometheusParseConfig{
-		VarMode: varMode,
+	var promParser *metrics.PrometheusParser
+	if format == "prometheus" {
+		promParser = metrics.NewPrometheusParser(metrics.PrometheusParseConfig{
+			VarMode: varMode,
+		})
 	}
 
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -243,7 +227,7 @@ func makeHTTPIngestHandler(
 		)
 		switch format {
 		case "prometheus":
-			points, err = metrics.ParsePointsPrometheusFromReader(r.Body, promCfg)
+			points, err = promParser.ParseFromReader(r.Body)
 		default:
 			points, err = metrics.ParsePointsJSONFromReader(r.Body)
 		}

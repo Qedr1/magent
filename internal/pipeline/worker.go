@@ -125,13 +125,6 @@ func newMetricWorker(cfg WorkerConfig, sink Sink, logger *slog.Logger) (*metricW
 	}, nil
 }
 
-// isVariableAllowed applies filter_var/drop_var masks to variable name.
-// Params: name is variable name; filterVar keeps only matches; dropVar removes matches.
-// Returns: true when variable should remain in event data.
-func isVariableAllowed(name string, filterVar, dropVar []string) bool {
-	return isVariableAllowedCompiled(name, compileWildcardPatterns(filterVar), compileWildcardPatterns(dropVar))
-}
-
 // compileWildcardPatterns compiles wildcard strings into reusable matchers.
 // Params: patterns wildcard strings with optional '*' characters.
 // Returns: compiled pattern slice (empty/blank entries are skipped).

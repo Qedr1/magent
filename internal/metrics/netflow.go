@@ -69,10 +69,11 @@ type packetSource struct {
 // Params: metricName emitted into event.metric, ifaceMasks wildcard interface selectors, topN emitted flow limit.
 // Returns: configured NETFLOW collector.
 type NETFLOWCollector struct {
-	metricName string
-	ifaceMasks []string
-	topN       int
-	flowIdle   time.Duration
+	metricName    string
+	ifaceMasks    []string
+	ifacePatterns []match.WildcardPattern
+	topN          int
+	flowIdle      time.Duration
 
 	mu      sync.Mutex
 	started bool
@@ -86,12 +87,16 @@ type NETFLOWCollector struct {
 // Returns: NETFLOW collector instance.
 func NewNETFLOWCollector(metricName string, ifaceMasks []string, topN uint32, flowIdleTimeout time.Duration) *NETFLOWCollector {
 	masks := make([]string, 0, len(ifaceMasks))
+	patterns := make([]match.WildcardPattern, 0, len(ifaceMasks))
 	for _, pattern := range ifaceMasks {
 		trimmed := strings.TrimSpace(pattern)
 		if trimmed == "" {
 			continue
 		}
 		masks = append(masks, trimmed)
+		if compiled, ok := match.CompileWildcard(trimmed); ok {
+			patterns = append(patterns, compiled)
+		}
 	}
 
 	limit := int(topN)
@@ -109,12 +114,13 @@ func NewNETFLOWCollector(metricName string, ifaceMasks []string, topN uint32, fl
 	}
 
 	return &NETFLOWCollector{
-		metricName: strings.TrimSpace(metricName),
-		ifaceMasks: masks,
-		topN:       limit,
-		flowIdle:   flowIdleTimeout,
-		sources:    make(map[string]*packetSource),
-		shards:     shards,
+		metricName:    strings.TrimSpace(metricName),
+		ifaceMasks:    masks,
+		ifacePatterns: patterns,
+		topN:          limit,
+		flowIdle:      flowIdleTimeout,
+		sources:       make(map[string]*packetSource),
+		shards:        shards,
 	}
 }
 
@@ -168,7 +174,7 @@ func (c *NETFLOWCollector) ensureStarted(ctx context.Context) error {
 // Params: none.
 // Returns: error when no matching/open interfaces exist.
 func (c *NETFLOWCollector) syncSources() error {
-	matched, err := resolveMatchingInterfaces(c.ifaceMasks)
+	matched, err := resolveMatchingInterfaces(c.ifacePatterns, c.ifaceMasks)
 	if err != nil {
 		return err
 	}
@@ -367,10 +373,10 @@ func hashFlowTuple(tuple flowTuple) uint64 {
 }
 
 // resolveMatchingInterfaces expands wildcard patterns to active interfaces.
-// Params: masks wildcard patterns.
+// Params: patterns compiled wildcard patterns; masks original wildcard strings for diagnostics.
 // Returns: interface map by name or error when no matches.
-func resolveMatchingInterfaces(masks []string) (map[string]net.Interface, error) {
-	if len(masks) == 0 {
+func resolveMatchingInterfaces(patterns []match.WildcardPattern, masks []string) (map[string]net.Interface, error) {
+	if len(patterns) == 0 {
 		return nil, fmt.Errorf("netflow.ifaces is required")
 	}
 
@@ -390,8 +396,8 @@ func resolveMatchingInterfaces(masks []string) (map[string]net.Interface, error)
 			continue
 		}
 
-		for _, pattern := range masks {
-			if match.WildcardMatch(pattern, name) {
+		for _, pattern := range patterns {
+			if pattern.Match(name) {
 				matched[name] = iface
 				break
 			}

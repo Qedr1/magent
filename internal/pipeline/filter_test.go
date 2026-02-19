@@ -1,22 +1,29 @@
 package pipeline
 
-import "testing"
+import (
+	"testing"
+
+	"magent/internal/match"
+)
 
 // TestIsVariableAllowed_FilterAndDrop verifies filter_var/drop_var precedence.
 // Params: testing.T for assertions.
 // Returns: none.
 func TestIsVariableAllowed_FilterAndDrop(t *testing.T) {
-	allowed := isVariableAllowed("rx_bytes_per_sec", []string{"rx_*"}, []string{"rx_err"})
+	filterVar := compileWildcardPatterns([]string{"rx_*"})
+	dropVar := compileWildcardPatterns([]string{"rx_err"})
+
+	allowed := isVariableAllowedCompiled("rx_bytes_per_sec", filterVar, dropVar)
 	if !allowed {
 		t.Fatalf("expected rx_bytes_per_sec to pass filter_var")
 	}
 
-	dropped := isVariableAllowed("rx_err", []string{"rx_*"}, []string{"rx_err"})
+	dropped := isVariableAllowedCompiled("rx_err", filterVar, dropVar)
 	if dropped {
 		t.Fatalf("expected rx_err to be dropped by drop_var")
 	}
 
-	notFiltered := isVariableAllowed("tx_bytes_per_sec", []string{"rx_*"}, nil)
+	notFiltered := isVariableAllowedCompiled("tx_bytes_per_sec", filterVar, nil)
 	if notFiltered {
 		t.Fatalf("expected tx_bytes_per_sec to be dropped by filter_var")
 	}
@@ -88,7 +95,7 @@ func TestWildcardMatch_ComplexPatterns(t *testing.T) {
 	}
 
 	for _, testCase := range testCases {
-		got := wildcardMatch(testCase.pattern, testCase.value)
+		got := match.WildcardMatch(testCase.pattern, testCase.value)
 		if got != testCase.match {
 			t.Fatalf(
 				"unexpected wildcard result pattern=%q value=%q got=%v want=%v",
