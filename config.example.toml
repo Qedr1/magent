@@ -1,0 +1,300 @@
+# =====================================================================
+# magent example config
+# =====================================================================
+# Notes:
+# 1) Environment variables are expanded before TOML parsing.
+#    Example: "${DC}" -> value from process env.
+# 2) One collector "event" is one aggregated metric object for one
+#    key+metric+time-window (it may contain many var/aggs inside data).
+#    collector.batch.max_events counts such events.
+# 3) Percentiles are computed by agent on send window if configured.
+#    If percentiles are disabled for a worker, agent forces scrape=send.
+# 4) Agent accepts `-config` as one file or a directory with `*.toml`.
+#    Directory mode merges files in lexicographical order by file name.
+
+# ---------------------------------------------------------------------
+# Global tags (required for all outgoing events)
+# ---------------------------------------------------------------------
+[global]
+# Datacenter / zone tag.
+dc = "${DC}"
+# Project / system tag.
+project = "${PROJECT}"
+# Host role tag (app, db, cache, etc).
+role = "${ROLE}"
+# Optional host override. Empty -> OS hostname.
+host = ""
+
+# ---------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------
+[log.console]
+# Enable console logs.
+enabled = true
+# Level: debug|info|warn|error|panic
+level = "info"
+# Format: line|json
+format = "line"
+
+[log.file]
+# Enable file logs.
+enabled = false
+# Level: debug|info|warn|error|panic
+level = "info"
+# Format: line|json
+format = "json"
+# File path used when enabled=true.
+path = "./var/log/magent.log"
+
+# ---------------------------------------------------------------------
+# pprof (runtime profiling endpoints)
+# ---------------------------------------------------------------------
+[pprof]
+# Enable HTTP pprof server (/debug/pprof/*).
+enabled = false
+# Listen address for pprof server.
+listen = "127.0.0.1:6060"
+
+# ---------------------------------------------------------------------
+# ClickHouse connection params (for tooling/tests; runtime sink is collector)
+# ---------------------------------------------------------------------
+[db.clickhouse]
+host = "127.0.0.1"
+port = 8123
+database = "metrics"
+user = "default"
+password = "${CH_PASSWORD}"
+# HTTPS for ClickHouse HTTP endpoint.
+secure = false
+# Connection timeout.
+dial_timeout = "5s"
+
+# ---------------------------------------------------------------------
+# Global metric defaults
+# ---------------------------------------------------------------------
+[metrics]
+# Default poll period for pull-based workers.
+scrape = "5s"
+# Default emit/send period (aggregation window size).
+send = "30s"
+# Default percentiles for workers (p50/p90/p99 in output).
+# Worker may override. Empty list disables percentile aggs (last only).
+percentiles = [50, 90, 99]
+
+# ---------------------------------------------------------------------
+# Built-in metric: CPU
+# key: total, core0, core1, ...
+# vars: util
+# ---------------------------------------------------------------------
+[[metrics.cpu]]
+# Unique worker name.
+name = "cpu-main"
+scrape = "5s"
+send = "30s"
+
+# ---------------------------------------------------------------------
+# Built-in metric: RAM
+# key: total
+# vars: total, used, free, util
+# ---------------------------------------------------------------------
+[[metrics.ram]]
+name = "ram-main"
+scrape = "5s"
+send = "30s"
+
+# ---------------------------------------------------------------------
+# Built-in metric: SWAP
+# key: total
+# vars: total, used, util
+# ---------------------------------------------------------------------
+[[metrics.swap]]
+name = "swap-main"
+scrape = "5s"
+send = "30s"
+
+# ---------------------------------------------------------------------
+# Built-in metric: Kernel counters
+# key: total
+# vars: selected /proc kernel counters (see docs/README.md)
+# ---------------------------------------------------------------------
+[[metrics.kernel]]
+name = "kernel-main"
+scrape = "5s"
+send = "30s"
+
+# ---------------------------------------------------------------------
+# Built-in metric: NET
+# key: <iface>, total, cc:<algo>
+# vars:
+#   iface: rx_*/tx_* counters and rates
+#   total: tcp_*/udp_* host counters
+#   cc:<algo>: tcp socket quality snapshot by congestion control
+# ---------------------------------------------------------------------
+[[metrics.net]]
+name = "net-main"
+scrape = "5s"
+send = "30s"
+# Per-cc socket sampling limit. 0 disables key=cc:<algo> points.
+tcp_cc_top_n = 2000
+# Optional var include filter (wildcards).
+# filter_var = ["rx_*", "tx_*"]
+# Optional var drop filter.
+# drop_var = ["rx_err", "tx_err", "rx_drop", "tx_drop"]
+# Optional event drop rules.
+# drop_event = ["key!=eth*"]
+
+# ---------------------------------------------------------------------
+# Built-in metric: NETFLOW (disabled example)
+# no cgo; AF_PACKET capture
+# key format: iface|proto|src_ip|src_port|dst_ip|dst_port
+# vars: bytes, packets, flows
+# NOTE: requires root or CAP_NET_RAW
+# ---------------------------------------------------------------------
+# [[metrics.netflow]]
+# name = "netflow-main"
+# Interface matcher list, wildcard allowed.
+# ifaces = ["eth*", "enp*"]
+# Keep top N flows per scrape by bytes.
+# top_n = 20
+# UDP new-flow inactivity timeout.
+# flow_idle_timeout = "10s"
+# Pull/send periods.
+# scrape = "5s"
+# send = "30s"
+# Recommended for netflow: last-only output.
+# percentiles = []
+
+# ---------------------------------------------------------------------
+# Built-in metric: DISK (block devices only; partitions are ignored)
+# key: /dev/<name>
+# vars: io ops/rates/await/qdepth/util/inflight
+# ---------------------------------------------------------------------
+[[metrics.disk]]
+name = "disk-main"
+scrape = "5s"
+send = "30s"
+
+# ---------------------------------------------------------------------
+# Built-in metric: FS
+# key: mountpoint
+# vars: bytes + inodes + readonly
+# ---------------------------------------------------------------------
+[[metrics.fs]]
+name = "fs-main"
+scrape = "10s"
+send = "30s"
+
+# ---------------------------------------------------------------------
+# Built-in metric: PROCESS
+# key: process name
+# vars: cpu_util, ram_util, iops
+# Thresholds use OR logic; if none set -> worker is skipped.
+# ---------------------------------------------------------------------
+[[metrics.process]]
+name = "process-main"
+scrape = "20s"
+send = "30s"
+# Emit process when max cpu_util in window >= value.
+cpu_util = 10
+# Emit process when max ram_util in window >= value.
+ram_util = 5
+# Emit process when max iops in window >= value.
+# iops = 100
+# Optional additional drop rules.
+# drop_event = ["iops>10000","key!=*postgres*"]
+
+# ---------------------------------------------------------------------
+# External metric: SCRIPT (disabled example)
+# Agent executes command and parses stdout.
+# Supported formats:
+# - JSON contract: {"key":"total","data":{"util":67}}
+# - Prometheus text exposition (counter/gauge)
+# ---------------------------------------------------------------------
+# [[metrics.script.db]]
+# name = "script-db-main"
+# scrape = "5s"
+# send = "30s"
+# path = "./scripts/db-metric.sh"
+# timeout = "5s"
+# env = { DB_DSN = "${DB_DSN}" }
+# Standard filters for resulting vars/events.
+# filter_var = ["conn_*", "util"]
+
+# ---------------------------------------------------------------------
+# External metric: HTTP SERVER push (disabled example)
+# Agent exposes endpoint, external producer POSTs payload.
+# No scrape here; only send window aggregation.
+# JSON contract:
+# {"key":"total","data":{"util":{"last":67}}}
+# or
+# {"key":"total","data":{"util":67}}
+# ---------------------------------------------------------------------
+# [[metrics.http_server.http_server_demo]]
+# name = "http-server-demo"
+# listen = "127.0.0.1:18090"
+# path = "/metrics"
+# send = "30s"
+# Pending incoming batches in memory before 503 on overload.
+# max_pending = 4096
+
+# ---------------------------------------------------------------------
+# External metric: HTTP CLIENT pull (disabled example)
+# Agent does HTTP GET and parses response.
+# format=json|prometheus
+# URL placeholders: {dc},{host},{project},{role},{metric},{instance}
+# ---------------------------------------------------------------------
+# [[metrics.http_client.http_client_demo]]
+# name = "http-client-demo"
+# url = "http://127.0.0.1:18091/metrics/{dc}/{host}"
+# format = "json"
+# scrape = "5s"
+# send = "30s"
+# timeout = "5s"
+
+# ---------------------------------------------------------------------
+# HTTP CLIENT + Prometheus example for Vector monitoring (disabled)
+# Labels are ignored (key is always total); selection is done by filters.
+# var_mode:
+# - full: keep full metric name
+# - short: strip common prefix where possible
+# ---------------------------------------------------------------------
+# [[metrics.http_client.vector_monitor]]
+# name = "vector-monitor"
+# url = "http://127.0.0.1:19598/metrics"
+# format = "prometheus"
+# filter_var = ["vector_build_info", "vector_api_started_total"]
+# var_mode = "full"
+# scrape = "5s"
+# send = "30s"
+# timeout = "5s"
+# last-only mode example:
+# percentiles = []
+
+# ---------------------------------------------------------------------
+# Collectors (delivery targets)
+# - addr list in one collector = failover order
+# - multiple [[collector]] blocks = fan-out to all collectors
+# ---------------------------------------------------------------------
+[[collector]]
+name = "primary"
+addr = ["127.0.0.1:6000", "127.0.0.1:6001"]
+# Timeout per send attempt to one address.
+timeout = "5s"
+# Delay before retry/queue-drain cycles.
+retry_interval = "3s"
+
+[collector.batch]
+# Flush batch when event count reaches this limit.
+max_events = 200
+# Flush batch by age even if max_events is not reached.
+max_age = "5s"
+
+[collector.queue]
+# Enable disk queue for unavailable collector scenarios.
+enabled = false
+# Queue directory (queue.bin + offset.bin).
+dir = "./var/queue/primary"
+# Max queued events on disk (0 means unlimited by count).
+max_events = 100000
+# Max age of oldest queued record (0 means unlimited by age).
+max_age = "24h"

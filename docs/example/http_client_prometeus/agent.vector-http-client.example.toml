@@ -1,0 +1,67 @@
+[global]
+dc = "${DC}"
+project = "${PROJECT}"
+role = "${ROLE}"
+host = ""
+
+[log.console]
+enabled = true
+level = "info"
+format = "line"
+
+[log.file]
+enabled = false
+level = "info"
+format = "json"
+path = "./var/log/magent.log"
+
+[metrics]
+scrape = "10s"
+send = "60s"
+percentiles = [50, 90, 99]
+
+# Monitor real Vector internal metrics via Prometheus exposition.
+# Table in ClickHouse: vector_internal (because metric name below is vector_internal).
+[[metrics.http_client.vector_internal]]
+name = "vector-internal-prom"
+url = "http://127.0.0.1:19598/metrics"
+format = "prometheus"
+
+# Keep only selected metrics via standard filter_var.
+filter_var = [
+  "vector_component_received_events_total",
+  "vector_component_sent_events_total",
+  "vector_component_received_event_bytes_total",
+  "vector_component_sent_event_bytes_total",
+  "vector_component_errors_total",
+  "vector_component_discarded_events_total",
+  "vector_component_received_bytes_total",
+  "vector_component_sent_bytes_total",
+  "vector_buffer_events",
+  "vector_buffer_byte_size",
+  "vector_utilization",
+  "vector_started_total",
+  "vector_build_info"
+]
+
+var_mode = "full"
+scrape = "10s"
+send = "60s"
+timeout = "5s"
+percentiles = []
+
+[[collector]]
+name = "vector-local"
+addr = ["127.0.0.1:6000"]
+timeout = "5s"
+retry_interval = "3s"
+
+[collector.batch]
+max_events = 500
+max_age = "5s"
+
+[collector.queue]
+enabled = true
+dir = "./var/queue/primary"
+max_events = 100000
+max_age = "24h"

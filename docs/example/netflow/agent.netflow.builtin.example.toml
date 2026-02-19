@@ -1,0 +1,45 @@
+[global]
+dc = "${DC}"
+project = "${PROJECT}"
+role = "${ROLE}"
+host = ""
+
+[log.console]
+enabled = true
+level = "info"
+format = "line"
+
+[log.file]
+enabled = false
+level = "info"
+format = "json"
+path = "./var/log/magent.log"
+
+[metrics]
+scrape = "5s"
+send = "60s"
+
+[[metrics.netflow]]
+# Requires privileged raw packet access: run agent as root (or grant CAP_NET_RAW).
+name = "netflow-local"
+ifaces = ["eth*", "enp*", "lo"]
+top_n = 20
+scrape = "5s"
+send = "60s"
+percentiles = []
+
+[[collector]]
+name = "vector-local"
+addr = ["127.0.0.1:6000"]
+timeout = "5s"
+retry_interval = "3s"
+
+[collector.batch]
+max_events = 1000
+max_age = "5s"
+
+[collector.queue]
+enabled = true
+dir = "./var/queue/netflow"
+max_events = 100000
+max_age = "24h"

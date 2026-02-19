@@ -1,0 +1,44 @@
+[sources.agent_in]
+type = "vector"
+version = "2"
+address = "0.0.0.0:6201"
+
+[transforms.flatten_rows]
+type = "remap"
+inputs = ["agent_in"]
+source = '''
+events = []
+base_event = .
+del(base_event.data)
+
+if is_object(.data) {
+  for_each(object!(.data)) -> |var_name, agg_map| {
+    if is_object(agg_map) {
+      for_each(object!(agg_map)) -> |agg_name, agg_value| {
+        event = merge(base_event, {
+          "var": var_name,
+          "agg": agg_name,
+          "value": to_int(agg_value) ?? 0
+        })
+        events = push(events, event)
+      }
+    }
+  }
+}
+
+. = events
+'''
+
+[sinks.clickhouse]
+type = "clickhouse"
+inputs = ["flatten_rows"]
+endpoint = "http://127.0.0.1:8123"
+database = "metrics"
+table = "{{ .metric }}"
+compression = "none"
+skip_unknown_fields = true
+date_time_best_effort = true
+
+[sinks.clickhouse.batch]
+max_events = 1000
+timeout_secs = 1
