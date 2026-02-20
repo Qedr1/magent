@@ -10,6 +10,7 @@
                 │ table +     |
                 │ mat. view   |
                 └─────────────┘
+                 ▲
             ┌────┴────┐
             │ STORAGE │   # ClickHouse
             └────▲────┘
