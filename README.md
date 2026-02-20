@@ -492,6 +492,9 @@ PARTITION BY: toYYYYMMDD(dt)
 TTL: dt + INTERVAL 4 MONTH
 ```
 
+## Алертинг
+https://github.com/Qedr1/malert
+
 ## TODO
 - snmp trap
-- алертинг
+
