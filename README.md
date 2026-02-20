@@ -1,21 +1,26 @@
 # Агент сбора метрик Linux
 ```
-      ┌────────┐
-      │ VIEWER │    # Grafana
-      └────▲───┘
-           │ table +
-           │ mat. view
-      ┌────┴────┐
-      │ STORAGE │   # ClickHouse
-      └────▲────┘
-           │ insert (batch)
-     ┌─────┴─────┐
-     │ COLLECTOR │  # vector.dev
-     └─────▲─────┘
-           │ events gRPC (batch)
-       ┌───┴────┐
-       │  HOST  │   # magent
-       └────────┘
+                         ┌─────────┐
+                         | Alerting|  # mAlert   https://github.com/Qedr1/malert
+                         └────▲────┘
+                              |
+           ┌────────┐    ┌────┴───┐
+# Grafana  │ VIEWER │    |  NATS  |
+           └────▲───┘    └────▲───┘
+                │ table +     |
+                │ mat. view   |
+                ______________|
+            ┌────┴────┐
+            │ STORAGE │   # ClickHouse
+            └────▲────┘
+                 │ insert (batch)
+           ┌─────┴─────┐
+           │ COLLECTOR │  # vector.dev
+           └─────▲─────┘
+                 │ events gRPC (batch)
+             ┌───┴────┐
+             │  HOST  │   # magent
+             └────────┘
 
 ```
 magent собирает системные метрики: утилизация сетевых интерфейсов, CPU, RAM, disk, fs, netflow-пары, сетевой стек, ядро, процессы и т. д. Также собирает произвольные внешние метрики: выполняет скрипты, принимает через http_server или опрашивает через http_client.
