@@ -4,9 +4,9 @@
                          | Alerting|  # mAlert   https://github.com/Qedr1/malert
                          └────▲────┘
                               |
-           ┌────────┐    ┌────┴───┐
-# Grafana  │ VIEWER │    |  NATS  |
-           └────▲───┘    └────▲───┘
+           ┌────────┐    ┌────┴──────┐
+# Grafana  │ VIEWER │    |  QUEUE+KV |   # NATS
+           └────▲───┘    └────▲──────┘
                 │ table +     |
                 │ mat. view   |
                 └▲────────────┘
