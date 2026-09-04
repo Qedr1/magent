@@ -635,7 +635,7 @@ This section details the Transform iteration configuration.
 - it flattens one event into N rows: row count = sum over all vars in `data`; for example `disk` is the table name, `rx_io` is `var`, `last`/`p90` are `agg`, and `value` holds the values
 - for keyed fields (for example cores): every key × every agg = one row
 - routing to a table by metric name: `table = {metric_name}`
-- the transformation is written in VRL (Vector Remap Language): a remap that expands into an array of events; no separate route is used
+- the transformation is written in VRL (Vector Remap Language) as two remap stages: the first builds compact row records and explodes them with the native `unnest` function, the second promotes `var`/`agg`/`value` to the top level; no separate route is used
 - results of `[[metrics.script.<name>]]` go to table `<name>`
 - the standard event timestamp field (`.timestamp`) is renamed to `dtv`
 - `host_ip` is added by the agent to every event at batch encoding (see [Event Structure](#event-structure))
@@ -722,5 +722,6 @@ Collector delivery rework and agent self-metrics:
 - hot reload: when `[[collector]]` is unchanged, delivery (gRPC connections, disk queues, unsent batches) is handed over to the new runtime without interruption
 - new built-in always-on metric `magent_internal`: per-collector `queue_pending`, `batches_sent`, `batches_failed`, `overflow_dropped`, `addr_switches` and per-worker `scrape_errors`, delivered through the common pipeline into the `magent_internal` table
 - `host_ip` is resolved by route lookup (no network traffic) and baked into events at batch encoding, so it is present even for batches encoded during a collector outage
+- collector: event flattening in Vector reworked from an interpreted VRL loop (`for_each` + per-row `merge` of the full event) into a two-stage chain (compact row records + native `unnest` explode + field promotion) — ~2x lower transform CPU with byte-identical output rows
 - deploy: `magent_internal` added to the default table list of `deploy/clickhouse/create_builtin_tables.sh`
 - docs: this README rewritten in English with a normalized structure

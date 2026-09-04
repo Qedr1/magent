@@ -7,30 +7,40 @@ address = "0.0.0.0:6000"
 type = "remap"
 inputs = ["agent_in"]
 source = '''
-events = []
-base_event = .
-del(base_event.data)
+rows = []
 
 if is_object(.data) {
   for_each(object!(.data)) -> |var_name, agg_map| {
     if is_object(agg_map) {
       for_each(object!(agg_map)) -> |agg_name, agg_value| {
-        event = merge(base_event, {
+        rows = push(rows, {
           "var": var_name,
           "agg": agg_name,
           "value": to_int(agg_value) ?? 0
         })
-        events = push(events, event)
       }
     }
   }
 }
 
-. = events
+del(.data)
+.rows = rows
+. = unnest(.rows)
+'''
+
+# Promote exploded row fields to top level (cheap per-event assignments, no loops/clones).
+[transforms.promote_rows]
+type = "remap"
+inputs = ["flatten_rows"]
+source = '''
+.var = .rows.var
+.agg = .rows.agg
+.value = .rows.value
+del(.rows)
 '''
 
 [sinks.flatten_log]
 type = "file"
-inputs = ["flatten_rows"]
+inputs = ["promote_rows"]
 path = "./var/vector/flatten.log"
 encoding.codec = "json"
