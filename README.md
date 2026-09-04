@@ -85,27 +85,27 @@ This section defines every concept the architecture description uses; later sect
 
 One sequential process turns host state into dashboard rows. In **Collection** (owner: magent) each configured metric worker scrapes its source once per `scrape` period and aggregates samples in its window; once per `send` period the window becomes a set of events. In **Delivery** (owner: magent) events are batched per collector, encoded once into Vector Protocol v2, and pushed to the collector's active address; failures go through re-election, retry, and the disk queue. In **Transform** (owner: Vector) each incoming log event is flattened into `key × var × agg` rows and routed to the table named by `metric`. In **Storage** (owner: ClickHouse) rows are inserted in batches into per-metric MergeTree tables. In **Visualization** (owner: Grafana) dashboards read tables and materialized views.
 
-The output of each iteration is the input of the next one: events → batches → rows → tables → dashboards. The diagram shows the same order, the owner of every iteration, and every transition.
+The output of each iteration is the input of the next one: events → batches → rows → tables → dashboards. As an alternative consumer, an alerting branch leaves Storage into a NATS queue read by the malert component. The diagram shows the same order, the owner of every iteration, and every transition.
 
 ```
-                ┌─────────┐
-                │ VIEWER  │     # Grafana — 5. Visualization
-                └────▲────┘
-                     │ table + mat. view
-                ┌────┴────┐
-                │ STORAGE │     # ClickHouse — 4. Storage
-                └────▲────┘
-                     │ insert (batch)
-       ┌─────────────┼─────────────┐
-       │             │             │
-  ┌────┴────┐   ┌────┴────┐   ┌────┴────┐
-  │ COLL-1  │   │ COLL-2  │ … │ COLL-N  │  # vector.dev — 3. Transform (1..N collectors)
-  └────▲────┘   └────▲────┘   └────▲────┘
-       └─────────────┼─────────────┘
-                     │ events gRPC (batch, fan-out)
-                ┌────┴────┐
-                │  HOST   │     # magent — 1. Collection, 2. Delivery
-                └─────────┘
+                  ┌─────────┐                 ┌─────────┐
+4  # Grafana      │ VIEWER  │                 │ MALERT  │   # alerting
+                  └────▲────┘                 └─────────┘┐
+                       │ table + mat. view     └───▲─────┘
+                       │                           │ 
+                  ┌────┴────┐   alert         ┌────┴────┐
+3  # ClickHouse   │ STORAGE │ ────────────▶   │  QUEUE  │   # NATS
+                  └────▲────┘   nats engine   └─────────┘┐
+                       │                       └─────────┘ 
+                       │ insert (batch) 
+                  ┌────┴──────┐
+2                 │ COLL 1..N │    # vector.dev
+                  └───────────┘┐
+                   └───▲───────┘
+                       │ events gRPC (batch, fan-out)
+                  ┌────┴──┐
+1                 │  HOST │        # magent
+                  └───────┘
 ```
 
 ### Collection (owner: magent)
@@ -185,7 +185,7 @@ This iteration presents stored data to operators.
 - Action: dashboards query tables directly.
 - Output: panels and alerts built on the universal columns.
 - Result: the terminal state of the process — operators observe fleet state.
-- Next transition: none (terminal iteration).
+- Next transition: none for dashboards; the alerting alternative branches from Storage into the NATS queue consumed by malert.
 
 ## Stress Tests
 
