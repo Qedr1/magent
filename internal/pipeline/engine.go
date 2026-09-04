@@ -90,9 +90,14 @@ func sortedMetricNames[T any](definitions map[string][]T) []string {
 }
 
 // NewFromConfig builds metric workers for configured metrics.
-// Params: cfg validated runtime config; logger initialized logger.
+// Params: ctx lifecycle context; cfg validated runtime config; logger initialized logger;
+// collectorSink delivery sink owned by the app runtime.
 // Returns: engine with active workers or error.
-func NewFromConfig(ctx context.Context, cfg *config.Config, logger *slog.Logger) (*Engine, error) {
+func NewFromConfig(ctx context.Context, cfg *config.Config, logger *slog.Logger, collectorSink *CollectorSink) (*Engine, error) {
+	if collectorSink == nil {
+		return nil, fmt.Errorf("collector sink is nil")
+	}
+
 	tags := EventTags{
 		DC:      cfg.Global.DC,
 		Host:    cfg.Global.Host,
@@ -100,15 +105,12 @@ func NewFromConfig(ctx context.Context, cfg *config.Config, logger *slog.Logger)
 		Role:    cfg.Global.Role,
 	}
 
-	collectorSink, err := NewCollectorSink(ctx, cfg.Collector, logger, &VectorGRPCSender{})
-	if err != nil {
-		return nil, fmt.Errorf("init collector sink: %w", err)
-	}
 	sink := NewMultiSink(
 		collectorSink,
 		NewLogSink(logger),
 	)
 	runners := make([]runner, 0)
+	metricWorkers := make([]*metricWorker, 0)
 
 	specs := []builtInMetricSpec{
 		{
@@ -174,6 +176,7 @@ func NewFromConfig(ctx context.Context, cfg *config.Config, logger *slog.Logger)
 		if buildErr != nil {
 			return nil, buildErr
 		}
+		metricWorkers = append(metricWorkers, workerSet...)
 		runners = appendMetricWorkers(runners, workerSet)
 	}
 
@@ -181,24 +184,28 @@ func NewFromConfig(ctx context.Context, cfg *config.Config, logger *slog.Logger)
 	if err != nil {
 		return nil, err
 	}
+	metricWorkers = append(metricWorkers, netflowWorkers...)
 	runners = appendMetricWorkers(runners, netflowWorkers)
 
 	processWorkers, err := buildProcessWorkers(cfg, tags, logger, sink)
 	if err != nil {
 		return nil, err
 	}
+	metricWorkers = append(metricWorkers, processWorkers...)
 	runners = appendMetricWorkers(runners, processWorkers)
 
 	scriptWorkers, err := buildScriptWorkers(cfg, tags, logger, sink)
 	if err != nil {
 		return nil, err
 	}
+	metricWorkers = append(metricWorkers, scriptWorkers...)
 	runners = appendMetricWorkers(runners, scriptWorkers)
 
 	httpClientWorkers, err := buildHTTPClientWorkers(cfg, tags, logger, sink)
 	if err != nil {
 		return nil, err
 	}
+	metricWorkers = append(metricWorkers, httpClientWorkers...)
 	runners = appendMetricWorkers(runners, httpClientWorkers)
 
 	httpServerRunners, err := buildHTTPServerRunners(cfg, tags, logger, sink)
@@ -206,6 +213,12 @@ func NewFromConfig(ctx context.Context, cfg *config.Config, logger *slog.Logger)
 		return nil, err
 	}
 	runners = append(runners, httpServerRunners...)
+
+	selfWorker, err := buildSelfMetricsWorker(cfg.Metrics, tags, logger, sink, collectorSink, metricWorkers)
+	if err != nil {
+		return nil, err
+	}
+	runners = append(runners, selfWorker)
 
 	return &Engine{
 		runners: runners,

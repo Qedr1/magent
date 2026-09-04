@@ -887,6 +887,109 @@ max_events = 100
 	}
 }
 
+// TestLoad_CollectorDeliveryDefaults verifies defaults for overflow/compression/health_interval.
+// Params: testing.T for assertions.
+// Returns: none.
+func TestLoad_CollectorDeliveryDefaults(t *testing.T) {
+	path := writeConfig(t, `
+[global]
+dc = "dc1"
+project = "infra"
+role = "db"
+
+[[collector]]
+addr = ["127.0.0.1:6000"]
+
+[collector.batch]
+max_events = 100
+`)
+
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+
+	collector := cfg.Collector[0]
+	if collector.OverflowDropOldest() {
+		t.Fatalf("expected overflow default to keep block behavior")
+	}
+	if collector.CompressionGzip() {
+		t.Fatalf("expected compression default to be none")
+	}
+	if got := collector.HealthInterval.Duration; got != 3*time.Second {
+		t.Fatalf("unexpected health_interval default: %v", got)
+	}
+}
+
+// TestLoad_CollectorDeliveryOverrides verifies explicit overflow/compression/health_interval values.
+// Params: testing.T for assertions.
+// Returns: none.
+func TestLoad_CollectorDeliveryOverrides(t *testing.T) {
+	path := writeConfig(t, `
+[global]
+dc = "dc1"
+project = "infra"
+role = "db"
+
+[[collector]]
+addr = ["127.0.0.1:6000"]
+overflow = "drop_oldest"
+compression = "gzip"
+health_interval = "10s"
+
+[collector.batch]
+max_events = 100
+`)
+
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+
+	collector := cfg.Collector[0]
+	if !collector.OverflowDropOldest() {
+		t.Fatalf("expected overflow=drop_oldest to be applied")
+	}
+	if !collector.CompressionGzip() {
+		t.Fatalf("expected compression=gzip to be applied")
+	}
+	if got := collector.HealthInterval.Duration; got != 10*time.Second {
+		t.Fatalf("unexpected health_interval: %v", got)
+	}
+}
+
+// TestLoad_RejectsInvalidCollectorDelivery verifies validation of overflow/compression values.
+// Params: testing.T for assertions.
+// Returns: none.
+func TestLoad_RejectsInvalidCollectorDelivery(t *testing.T) {
+	cases := map[string]string{
+		"overflow":    `overflow = "drop_random"`,
+		"compression": `compression = "zstd"`,
+	}
+
+	for name, extra := range cases {
+		t.Run(name, func(t *testing.T) {
+			path := writeConfig(t, `
+[global]
+dc = "dc1"
+project = "infra"
+role = "db"
+
+[[collector]]
+addr = ["127.0.0.1:6000"]
+`+extra+`
+
+[collector.batch]
+max_events = 100
+`)
+
+			if _, err := config.Load(path); err == nil {
+				t.Fatalf("expected validation error for invalid %s", name)
+			}
+		})
+	}
+}
+
 // writeConfig creates a temp TOML config for tests.
 // Params: t test handle; body TOML content.
 // Returns: absolute path to temp config.

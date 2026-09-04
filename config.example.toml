@@ -272,7 +272,7 @@ ram_util = 5
 
 # ---------------------------------------------------------------------
 # Collectors (delivery targets)
-# - addr list in one collector = failover order
+# - addr list in one collector = health-probed set; first alive = active
 # - multiple [[collector]] blocks = fan-out to all collectors
 # ---------------------------------------------------------------------
 [[collector]]
@@ -282,6 +282,16 @@ addr = ["127.0.0.1:6000", "127.0.0.1:6001"]
 timeout = "5s"
 # Delay before retry/queue-drain cycles.
 retry_interval = "3s"
+# Period of healthcheck probes over all addr entries; first alive address
+# becomes active and receives all batches until it fails.
+health_interval = "3s"
+# Input buffer overflow policy: block (wait for space, default) or
+# drop_oldest (never block metric workers; evict oldest event, counted
+# in magent_internal overflow_dropped).
+overflow = "block"
+# gRPC request compression: none (default) or gzip.
+# gzip requires compression support on the Vector side (vector source v2).
+compression = "none"
 
 [collector.batch]
 # Flush batch when event count reaches this limit.

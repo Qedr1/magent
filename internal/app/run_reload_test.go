@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"magent/internal/config"
+	"magent/internal/pipeline"
 )
 
 type fakeEngine struct {
@@ -41,13 +42,14 @@ type fakeEngineFactory struct {
 	mu      sync.Mutex
 	engines []*fakeEngine
 	cfgs    []*config.Config
+	sinks   []*pipeline.CollectorSink
 	failAt  map[int]error
 }
 
 // build creates one fake engine and records config snapshot.
 // Params: _ ignored runtime context; cfg runtime config snapshot; _ ignored logger.
 // Returns: fake engine or configured build error.
-func (f *fakeEngineFactory) build(_ context.Context, cfg *config.Config, _ *slog.Logger) (engineRunner, error) {
+func (f *fakeEngineFactory) build(_ context.Context, cfg *config.Config, _ *slog.Logger, sink *pipeline.CollectorSink) (engineRunner, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -59,6 +61,7 @@ func (f *fakeEngineFactory) build(_ context.Context, cfg *config.Config, _ *slog
 	engine := &fakeEngine{stopped: make(chan struct{})}
 	f.engines = append(f.engines, engine)
 	f.cfgs = append(f.cfgs, cfg)
+	f.sinks = append(f.sinks, sink)
 	return engine, nil
 }
 
@@ -136,6 +139,18 @@ func (f *fakeEngineFactory) metricCounts() []int {
 		out = append(out, len(cfg.Metrics.CPU))
 	}
 	return out
+}
+
+// sinkAt returns collector sink passed into specific engine build.
+// Params: index engine index.
+// Returns: sink pointer or nil when index is out of range.
+func (f *fakeEngineFactory) sinkAt(index int) *pipeline.CollectorSink {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if index >= len(f.sinks) {
+		return nil
+	}
+	return f.sinks[index]
 }
 
 // collectorCounts returns collector count per engine build.
@@ -217,19 +232,79 @@ func (f *fakePprofFactory) start(_ context.Context, _ config.PprofConfig, _ *slo
 	}, nil
 }
 
+type stubCollectorSender struct{}
+
+// Encode returns static payload for sink lifecycle tests.
+// Params: _ ignored events; _ ignored host ip.
+// Returns: static payload.
+func (stubCollectorSender) Encode(_ []pipeline.Event, _ string) ([]byte, error) {
+	return []byte("payload"), nil
+}
+
+// Send succeeds immediately in sink lifecycle tests.
+// Params: all params ignored.
+// Returns: nil.
+func (stubCollectorSender) Send(_ context.Context, _ string, _ []byte, _ time.Duration, _ bool) error {
+	return nil
+}
+
+// Check reports every address as healthy.
+// Params: all params ignored.
+// Returns: nil.
+func (stubCollectorSender) Check(_ context.Context, _ string, _ time.Duration) error {
+	return nil
+}
+
+// LocalIP returns static source ip.
+// Params: all params ignored.
+// Returns: loopback ip string.
+func (stubCollectorSender) LocalIP(_ context.Context, _ string, _ time.Duration) (string, error) {
+	return "127.0.0.1", nil
+}
+
+type fakeSinkFactory struct {
+	mu    sync.Mutex
+	sinks []*pipeline.CollectorSink
+}
+
+// create builds real collector sink over stub sender and tracks creations.
+// Params: collectors collector configs; logger root logger.
+// Returns: created sink or constructor error.
+func (f *fakeSinkFactory) create(collectors []config.CollectorConfig, logger *slog.Logger) (*pipeline.CollectorSink, error) {
+	sink, err := pipeline.NewCollectorSink(collectors, logger, stubCollectorSender{})
+	if err != nil {
+		return nil, err
+	}
+	f.mu.Lock()
+	f.sinks = append(f.sinks, sink)
+	f.mu.Unlock()
+	return sink, nil
+}
+
+// count returns created sink count.
+// Params: none.
+// Returns: number of created sinks.
+func (f *fakeSinkFactory) count() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.sinks)
+}
+
 // buildTestDeps creates run deps from fake components.
-// Params: loader, loggers, pprof, and engines fakes.
+// Params: loader, loggers, pprof, engines, and sinks fakes.
 // Returns: dependency set for runWithDeps tests.
 func buildTestDeps(
 	loader *loaderSequence,
 	loggers *fakeLoggerFactory,
 	pprof *fakePprofFactory,
 	engines *fakeEngineFactory,
+	sinks *fakeSinkFactory,
 ) runDeps {
 	return runDeps{
 		loadConfig: loader.load,
 		newLogger:  loggers.create,
 		startPprof: pprof.start,
+		newSink:    sinks.create,
 		newEngine:  engines.build,
 	}
 }
@@ -288,7 +363,8 @@ func TestRunWithDeps_ReloadValidConfig(t *testing.T) {
 	loggers := &fakeLoggerFactory{}
 	pprof := &fakePprofFactory{}
 	engines := &fakeEngineFactory{}
-	deps := buildTestDeps(loader, loggers, pprof, engines)
+	sinks := &fakeSinkFactory{}
+	deps := buildTestDeps(loader, loggers, pprof, engines, sinks)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -341,7 +417,8 @@ func TestRunWithDeps_ReloadInvalidConfigKeepsRuntime(t *testing.T) {
 	loggers := &fakeLoggerFactory{}
 	pprof := &fakePprofFactory{}
 	engines := &fakeEngineFactory{}
-	deps := buildTestDeps(loader, loggers, pprof, engines)
+	sinks := &fakeSinkFactory{}
+	deps := buildTestDeps(loader, loggers, pprof, engines, sinks)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -388,7 +465,8 @@ func TestRunWithDeps_ReloadApplyMetricSetChanges(t *testing.T) {
 	loggers := &fakeLoggerFactory{}
 	pprof := &fakePprofFactory{}
 	engines := &fakeEngineFactory{}
-	deps := buildTestDeps(loader, loggers, pprof, engines)
+	sinks := &fakeSinkFactory{}
+	deps := buildTestDeps(loader, loggers, pprof, engines, sinks)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -438,7 +516,8 @@ func TestRunWithDeps_ReloadApplyCollectorSetChanges(t *testing.T) {
 	loggers := &fakeLoggerFactory{}
 	pprof := &fakePprofFactory{}
 	engines := &fakeEngineFactory{}
-	deps := buildTestDeps(loader, loggers, pprof, engines)
+	sinks := &fakeSinkFactory{}
+	deps := buildTestDeps(loader, loggers, pprof, engines, sinks)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -486,11 +565,13 @@ func TestRunWithDeps_EngineStopsUnexpectedly(t *testing.T) {
 	loggers := &fakeLoggerFactory{}
 	pprof := &fakePprofFactory{}
 	engineErr := errors.New("boom")
+	sinks := &fakeSinkFactory{}
 	deps := runDeps{
 		loadConfig: loader.load,
 		newLogger:  loggers.create,
 		startPprof: pprof.start,
-		newEngine: func(_ context.Context, _ *config.Config, _ *slog.Logger) (engineRunner, error) {
+		newSink:    sinks.create,
+		newEngine: func(_ context.Context, _ *config.Config, _ *slog.Logger, _ *pipeline.CollectorSink) (engineRunner, error) {
 			return &immediateEngine{err: engineErr}, nil
 		},
 	}
@@ -525,11 +606,13 @@ func TestRunWithDeps_ReloadInterruptedByShutdown(t *testing.T) {
 
 	secondBuildStarted := make(chan struct{})
 	var buildCount atomic.Int32
+	sinks := &fakeSinkFactory{}
 	deps := runDeps{
 		loadConfig: loader.load,
 		newLogger:  loggers.create,
 		startPprof: pprof.start,
-		newEngine: func(ctx context.Context, _ *config.Config, _ *slog.Logger) (engineRunner, error) {
+		newSink:    sinks.create,
+		newEngine: func(ctx context.Context, _ *config.Config, _ *slog.Logger, _ *pipeline.CollectorSink) (engineRunner, error) {
 			call := buildCount.Add(1)
 			if call == 1 {
 				return &fakeEngine{stopped: make(chan struct{})}, nil
@@ -557,6 +640,100 @@ func TestRunWithDeps_ReloadInterruptedByShutdown(t *testing.T) {
 	}
 	cancel()
 
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("runWithDeps: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting runWithDeps stop")
+	}
+}
+
+// TestRunWithDeps_ReloadPreservesSinkOnUnchangedCollector verifies sink handoff when collector config is unchanged.
+// Params: t test context.
+// Returns: none.
+func TestRunWithDeps_ReloadPreservesSinkOnUnchangedCollector(t *testing.T) {
+	loader := &loaderSequence{
+		responses: []loaderResponse{
+			{cfg: testConfig("p1", 1, 1)},
+			{cfg: testConfig("p2", 2, 1)},
+		},
+	}
+	loggers := &fakeLoggerFactory{}
+	pprof := &fakePprofFactory{}
+	engines := &fakeEngineFactory{}
+	sinks := &fakeSinkFactory{}
+	deps := buildTestDeps(loader, loggers, pprof, engines, sinks)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	reload := make(chan struct{}, 1)
+	done := make(chan error, 1)
+	go func() {
+		done <- runWithDeps(ctx, Runtime{ConfigPath: "test.toml", Reload: reload}, deps)
+	}()
+
+	engines.waitCount(t, 1)
+	reload <- struct{}{}
+	engines.waitCount(t, 2)
+
+	if got := sinks.count(); got != 1 {
+		t.Fatalf("sink created=%d, want=1 (handoff expected)", got)
+	}
+	if engines.sinkAt(0) == nil || engines.sinkAt(0) != engines.sinkAt(1) {
+		t.Fatalf("expected identical sink instance across reload")
+	}
+
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("runWithDeps: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting runWithDeps stop")
+	}
+}
+
+// TestRunWithDeps_ReloadRecreatesSinkOnChangedCollector verifies sink rebuild when collector config changes.
+// Params: t test context.
+// Returns: none.
+func TestRunWithDeps_ReloadRecreatesSinkOnChangedCollector(t *testing.T) {
+	loader := &loaderSequence{
+		responses: []loaderResponse{
+			{cfg: testConfig("p1", 1, 1)},
+			{cfg: testConfig("p1", 1, 2)},
+		},
+	}
+	loggers := &fakeLoggerFactory{}
+	pprof := &fakePprofFactory{}
+	engines := &fakeEngineFactory{}
+	sinks := &fakeSinkFactory{}
+	deps := buildTestDeps(loader, loggers, pprof, engines, sinks)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	reload := make(chan struct{}, 1)
+	done := make(chan error, 1)
+	go func() {
+		done <- runWithDeps(ctx, Runtime{ConfigPath: "test.toml", Reload: reload}, deps)
+	}()
+
+	engines.waitCount(t, 1)
+	reload <- struct{}{}
+	engines.waitCount(t, 2)
+
+	if got := sinks.count(); got != 2 {
+		t.Fatalf("sink created=%d, want=2 (rebuild expected)", got)
+	}
+	if engines.sinkAt(0) == nil || engines.sinkAt(0) == engines.sinkAt(1) {
+		t.Fatalf("expected new sink instance after collector change")
+	}
+
+	cancel()
 	select {
 	case err := <-done:
 		if err != nil {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"strings"
 
 	"magent/internal/config"
@@ -27,7 +28,8 @@ type runDeps struct {
 	loadConfig func(string) (*config.Config, error)
 	newLogger  func(config.LogConfig) (*slog.Logger, func(), error)
 	startPprof func(context.Context, config.PprofConfig, *slog.Logger) (func(), error)
-	newEngine  func(context.Context, *config.Config, *slog.Logger) (engineRunner, error)
+	newSink    func([]config.CollectorConfig, *slog.Logger) (*pipeline.CollectorSink, error)
+	newEngine  func(context.Context, *config.Config, *slog.Logger, *pipeline.CollectorSink) (engineRunner, error)
 }
 
 type activeRuntime struct {
@@ -37,6 +39,7 @@ type activeRuntime struct {
 	cancel      context.CancelFunc
 	done        chan error
 	stopPprof   func()
+	sink        *pipeline.CollectorSink
 }
 
 // Run loads configuration, starts runtime, and supports hot reload via Runtime.Reload.
@@ -65,6 +68,7 @@ func runWithDeps(ctx context.Context, rt Runtime, deps runDeps) error {
 		case runErr := <-active.done:
 			active.done = nil
 			active.stopRuntime()
+			active.closeSink()
 
 			if ctx.Err() != nil {
 				reason := ctx.Err().Error()
@@ -84,6 +88,7 @@ func runWithDeps(ctx context.Context, rt Runtime, deps runDeps) error {
 			return fmt.Errorf("run pipeline: runner exited without context cancellation")
 		case <-ctx.Done():
 			active.stopRuntime()
+			active.closeSink()
 			reason := "canceled"
 			if ctx.Err() != nil {
 				reason = ctx.Err().Error()
@@ -120,8 +125,11 @@ func defaultRunDeps() runDeps {
 		loadConfig: config.Load,
 		newLogger:  logging.New,
 		startPprof: startPprofServer,
-		newEngine: func(ctx context.Context, cfg *config.Config, logger *slog.Logger) (engineRunner, error) {
-			return pipeline.NewFromConfig(ctx, cfg, logger)
+		newSink: func(collectors []config.CollectorConfig, logger *slog.Logger) (*pipeline.CollectorSink, error) {
+			return pipeline.NewCollectorSink(collectors, logger, &pipeline.VectorGRPCSender{})
+		},
+		newEngine: func(ctx context.Context, cfg *config.Config, logger *slog.Logger, sink *pipeline.CollectorSink) (engineRunner, error) {
+			return pipeline.NewFromConfig(ctx, cfg, logger, sink)
 		},
 	}
 }
@@ -134,7 +142,7 @@ func buildRuntimeFromPath(ctx context.Context, path string, deps runDeps) (*acti
 	if err != nil {
 		return nil, fmt.Errorf("load config: %w", err)
 	}
-	runtime, err := buildRuntimeFromConfig(ctx, cfg, deps, nil, nil)
+	runtime, err := buildRuntimeFromConfig(ctx, cfg, deps, nil, nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -142,7 +150,8 @@ func buildRuntimeFromPath(ctx context.Context, path string, deps runDeps) (*acti
 }
 
 // buildRuntimeFromConfig starts runtime components from already loaded config.
-// Params: ctx root lifecycle context; cfg validated config; deps runtime dependency set; logger/closeFn optional logger override.
+// Params: ctx root lifecycle context; cfg validated config; deps runtime dependency set;
+// logger/closeFn optional logger override; sink optional reused collector sink (nil creates a new one).
 // Returns: active runtime or startup error.
 func buildRuntimeFromConfig(
 	ctx context.Context,
@@ -150,6 +159,7 @@ func buildRuntimeFromConfig(
 	deps runDeps,
 	logger *slog.Logger,
 	closeFn func(),
+	sink *pipeline.CollectorSink,
 ) (*activeRuntime, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("config is nil")
@@ -179,8 +189,26 @@ func buildRuntimeFromConfig(
 		return nil, fmt.Errorf("start pprof: %w", err)
 	}
 
-	engine, err := deps.newEngine(runCtx, cfg, logger)
+	ownsSink := false
+	if sink == nil {
+		createdSink, sinkErr := deps.newSink(cfg.Collector, logger)
+		if sinkErr != nil {
+			stopPprof()
+			cancel()
+			if ownsLogger && closeFn != nil {
+				closeFn()
+			}
+			return nil, fmt.Errorf("init collector sink: %w", sinkErr)
+		}
+		sink = createdSink
+		ownsSink = true
+	}
+
+	engine, err := deps.newEngine(runCtx, cfg, logger, sink)
 	if err != nil {
+		if ownsSink {
+			_ = sink.Close()
+		}
 		stopPprof()
 		cancel()
 		if ownsLogger && closeFn != nil {
@@ -202,10 +230,11 @@ func buildRuntimeFromConfig(
 		cancel:      cancel,
 		done:        done,
 		stopPprof:   stopPprof,
+		sink:        sink,
 	}, nil
 }
 
-// reloadActiveRuntime applies config reload with validation and rollback.
+// reloadActiveRuntime applies config reload with validation, sink handoff, and rollback.
 // Params: ctx root lifecycle context; path config file path; active currently running runtime; deps runtime dependency set.
 // Returns: active runtime to keep running and optional reload error (non-fatal when rollback succeeds).
 func reloadActiveRuntime(
@@ -228,11 +257,21 @@ func reloadActiveRuntime(
 		return active, fmt.Errorf("init reload logger: %w", err)
 	}
 
+	reuseSink := reflect.DeepEqual(active.cfg.Collector, nextCfg.Collector)
+
 	active.stopRuntime()
-	nextRuntime, startErr := buildRuntimeFromConfig(ctx, nextCfg, deps, nextLogger, nextCloseFn)
+	if !reuseSink {
+		active.closeSink()
+	}
+
+	nextRuntime, startErr := buildRuntimeFromConfig(ctx, nextCfg, deps, nextLogger, nextCloseFn, active.sink)
 	if startErr == nil {
 		active.closeLoggerSink()
-		nextRuntime.logger.Info("config reload applied")
+		if reuseSink {
+			nextRuntime.logger.Info("config reload applied, collector delivery preserved")
+		} else {
+			nextRuntime.logger.Info("config reload applied")
+		}
 		return nextRuntime, nil
 	}
 	nextCloseFn()
@@ -242,8 +281,9 @@ func reloadActiveRuntime(
 	}
 
 	active.logger.Error("config reload apply failed, restoring previous runtime", slog.String("error", startErr.Error()))
-	rollbackRuntime, rollbackErr := buildRuntimeFromConfig(ctx, active.cfg, deps, active.logger, active.closeLogger)
+	rollbackRuntime, rollbackErr := buildRuntimeFromConfig(ctx, active.cfg, deps, active.logger, active.closeLogger, active.sink)
 	if rollbackErr != nil {
+		active.closeSink()
 		active.closeLoggerSink()
 		return nil, fmt.Errorf("apply reload: %w; rollback failed: %w", startErr, rollbackErr)
 	}
@@ -252,7 +292,7 @@ func reloadActiveRuntime(
 	return rollbackRuntime, fmt.Errorf("apply reload: %w", startErr)
 }
 
-// stopRuntime stops engine and pprof components while keeping logger open.
+// stopRuntime stops engine and pprof components while keeping logger and sink open.
 // Params: none.
 // Returns: none.
 func (r *activeRuntime) stopRuntime() {
@@ -271,6 +311,17 @@ func (r *activeRuntime) stopRuntime() {
 		r.stopPprof()
 		r.stopPprof = nil
 	}
+}
+
+// closeSink closes collector sink resources when delivery is not handed off.
+// Params: none.
+// Returns: none.
+func (r *activeRuntime) closeSink() {
+	if r == nil || r.sink == nil {
+		return
+	}
+	_ = r.sink.Close()
+	r.sink = nil
 }
 
 // closeLoggerSink closes active logger resources.

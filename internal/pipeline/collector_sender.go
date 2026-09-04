@@ -11,6 +11,10 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	_ "google.golang.org/grpc/encoding/gzip"
+	"google.golang.org/grpc/keepalive"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 
 	"magent/internal/vectorpb/eventpb"
@@ -19,11 +23,47 @@ import (
 
 // CollectorSender encodes event batches and sends prepared payloads.
 // Params: batch of events and destination address.
-// Returns: encoded payload and send status.
+// Returns: encoded payload, send and health-check status.
 type CollectorSender interface {
-	Encode(events []Event) ([]byte, error)
-	SendBatch(ctx context.Context, address string, events []Event, timeout time.Duration) error
-	Send(ctx context.Context, address string, payload []byte, timeout time.Duration) error
+	Encode(events []Event, hostIP string) ([]byte, error)
+	Send(ctx context.Context, address string, payload []byte, timeout time.Duration, gzip bool) error
+	Check(ctx context.Context, address string, timeout time.Duration) error
+	LocalIP(ctx context.Context, address string, timeout time.Duration) (string, error)
+}
+
+// rawBytesCodec passes pre-encoded protobuf payloads through gRPC without remarshal.
+// Params: payload pointer used as request/reply container.
+// Returns: raw bytes unchanged; content-subtype stays proto for server decoding.
+type rawBytesCodec struct{}
+
+// Name returns proto content-subtype expected by the Vector server.
+// Params: none.
+// Returns: codec name string.
+func (rawBytesCodec) Name() string {
+	return "proto"
+}
+
+// Marshal returns pre-encoded payload bytes as is.
+// Params: v must be *[]byte with encoded request.
+// Returns: payload bytes or type error.
+func (rawBytesCodec) Marshal(v any) ([]byte, error) {
+	payload, ok := v.(*[]byte)
+	if !ok {
+		return nil, fmt.Errorf("raw codec marshal expects *[]byte, got %T", v)
+	}
+	return *payload, nil
+}
+
+// Unmarshal copies response bytes into the target container.
+// Params: data raw response; v must be *[]byte.
+// Returns: type error when container is not *[]byte.
+func (rawBytesCodec) Unmarshal(data []byte, v any) error {
+	payload, ok := v.(*[]byte)
+	if !ok {
+		return fmt.Errorf("raw codec unmarshal expects *[]byte, got %T", v)
+	}
+	*payload = append((*payload)[:0], data...)
+	return nil
 }
 
 // VectorGRPCSender sends Vector Protocol v2 payloads over gRPC.
@@ -31,7 +71,6 @@ type CollectorSender interface {
 // Returns: sender implementation.
 type VectorGRPCSender struct {
 	mu      sync.RWMutex
-	clients map[string]vectorpb.VectorClient
 	conns   map[string]*grpc.ClientConn
 	localIP map[string]string
 }
@@ -43,7 +82,6 @@ func (s *VectorGRPCSender) Close() error {
 	s.mu.Lock()
 	conns := s.conns
 	s.conns = nil
-	s.clients = nil
 	s.localIP = nil
 	s.mu.Unlock()
 
@@ -60,13 +98,14 @@ func (s *VectorGRPCSender) Close() error {
 }
 
 // Encode serializes a batch into protobuf PushEventsRequest payload.
-// Params: events batch.
+// Params: events batch; hostIP optional source IP injected into every event.
 // Returns: protobuf payload or encode error.
-func (s *VectorGRPCSender) Encode(events []Event) ([]byte, error) {
+func (s *VectorGRPCSender) Encode(events []Event, hostIP string) ([]byte, error) {
 	request, err := buildPushEventsRequest(events)
 	if err != nil {
 		return nil, err
 	}
+	injectHostIP(request, hostIP)
 
 	payload, err := proto.Marshal(request)
 	if err != nil {
@@ -75,53 +114,17 @@ func (s *VectorGRPCSender) Encode(events []Event) ([]byte, error) {
 	return payload, nil
 }
 
-// SendBatch encodes events directly into request and pushes them to one Vector address.
-// Params: ctx lifecycle context; address destination host:port; events batch; timeout dial/call timeout.
-// Returns: send error on encode/connect/rpc failure.
-func (s *VectorGRPCSender) SendBatch(
-	ctx context.Context,
-	address string,
-	events []Event,
-	timeout time.Duration,
-) error {
-	request, err := buildPushEventsRequest(events)
-	if err != nil {
-		return err
-	}
-	return s.sendPreparedRequest(ctx, address, request, timeout)
-}
-
-// Send decodes and pushes payload to one Vector address with timeout.
-// Params: ctx lifecycle context; address destination host:port; payload encoded push request; timeout dial/call timeout.
-// Returns: send error on decode/connect/rpc failure.
-func (s *VectorGRPCSender) Send(ctx context.Context, address string, payload []byte, timeout time.Duration) error {
-	var request vectorpb.PushEventsRequest
-	if err := proto.Unmarshal(payload, &request); err != nil {
-		return fmt.Errorf("unmarshal push request: %w", err)
-	}
-	return s.sendPreparedRequest(ctx, address, &request, timeout)
-}
-
-// sendPreparedRequest sends a prepared push request to one Vector address.
-// Params: ctx lifecycle context; address destination host:port; request prepared payload; timeout dial/call timeout.
+// Send pushes pre-encoded payload to one Vector address without remarshal.
+// Params: ctx lifecycle context; address destination host:port; payload encoded push request;
+// timeout call timeout; gzip enables gzip compression for this call.
 // Returns: send error on connect/rpc failure.
-func (s *VectorGRPCSender) sendPreparedRequest(
-	ctx context.Context,
-	address string,
-	request *vectorpb.PushEventsRequest,
-	timeout time.Duration,
-) error {
+func (s *VectorGRPCSender) Send(ctx context.Context, address string, payload []byte, timeout time.Duration, gzip bool) error {
 	addr := strings.TrimSpace(address)
 	if addr == "" {
 		return fmt.Errorf("collector address is empty")
 	}
 
-	hostIP, err := s.localIPForAddress(ctx, addr, timeout)
-	if err == nil && hostIP != "" {
-		injectHostIP(request, hostIP)
-	}
-
-	client, err := s.clientForAddress(ctx, addr, timeout)
+	conn, err := s.connForAddress(addr)
 	if err != nil {
 		return err
 	}
@@ -133,10 +136,110 @@ func (s *VectorGRPCSender) sendPreparedRequest(
 		defer cancel()
 	}
 
-	if _, err := client.PushEvents(callCtx, request); err != nil {
+	callOpts := []grpc.CallOption{grpc.ForceCodec(rawBytesCodec{})}
+	if gzip {
+		callOpts = append(callOpts, grpc.UseCompressor("gzip"))
+	}
+
+	var reply []byte
+	if err := conn.Invoke(callCtx, vectorpb.Vector_PushEvents_FullMethodName, &payload, &reply, callOpts...); err != nil {
 		s.dropAddress(addr)
 		return fmt.Errorf("push events %s: %w", addr, err)
 	}
+	return nil
+}
+
+// Check probes collector readiness via Vector HealthCheck RPC with TCP dial fallback.
+// Params: ctx lifecycle context; address destination host:port; timeout probe timeout.
+// Returns: nil when collector is reachable, probe error otherwise.
+func (s *VectorGRPCSender) Check(ctx context.Context, address string, timeout time.Duration) error {
+	addr := strings.TrimSpace(address)
+	if addr == "" {
+		return fmt.Errorf("collector address is empty")
+	}
+
+	conn, err := s.connForAddress(addr)
+	if err != nil {
+		return err
+	}
+
+	callCtx := ctx
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		callCtx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
+
+	_, err = vectorpb.NewVectorClient(conn).HealthCheck(callCtx, &vectorpb.HealthCheckRequest{})
+	if err == nil {
+		return nil
+	}
+	if status.Code(err) == codes.Unimplemented {
+		return tcpProbe(callCtx, addr, timeout)
+	}
+	s.dropAddress(addr)
+	return fmt.Errorf("health check %s: %w", addr, err)
+}
+
+// LocalIP resolves and caches local source IP used towards destination address.
+// Uses UDP dial: performs only a route lookup without any network traffic,
+// so resolution succeeds even while the collector is unreachable.
+// Params: ctx lifecycle context; address destination host:port; timeout dial timeout.
+// Returns: local source IP or error.
+func (s *VectorGRPCSender) LocalIP(ctx context.Context, address string, timeout time.Duration) (string, error) {
+	s.mu.RLock()
+	if ip, ok := s.localIP[address]; ok {
+		s.mu.RUnlock()
+		return ip, nil
+	}
+	s.mu.RUnlock()
+
+	dialTimeout := timeout
+	if dialTimeout <= 0 {
+		dialTimeout = 5 * time.Second
+	}
+
+	dialCtx, cancel := context.WithTimeout(ctx, dialTimeout)
+	defer cancel()
+
+	conn, err := (&net.Dialer{Timeout: dialTimeout}).DialContext(dialCtx, "udp", address)
+	if err != nil {
+		return "", fmt.Errorf("resolve local ip for %s: %w", address, err)
+	}
+	defer conn.Close()
+
+	localAddr, ok := conn.LocalAddr().(*net.UDPAddr)
+	if !ok || localAddr.IP == nil {
+		return "", fmt.Errorf("resolve local ip for %s: unexpected local addr", address)
+	}
+	ip := localAddr.IP.String()
+
+	s.mu.Lock()
+	if s.localIP == nil {
+		s.localIP = make(map[string]string)
+	}
+	if _, exists := s.localIP[address]; !exists {
+		s.localIP[address] = ip
+	}
+	s.mu.Unlock()
+
+	return ip, nil
+}
+
+// tcpProbe checks raw TCP reachability for collectors without HealthCheck RPC.
+// Params: ctx probe context; address destination host:port; timeout dial timeout.
+// Returns: nil on successful connect, dial error otherwise.
+func tcpProbe(ctx context.Context, address string, timeout time.Duration) error {
+	dialTimeout := timeout
+	if dialTimeout <= 0 {
+		dialTimeout = 5 * time.Second
+	}
+
+	conn, err := (&net.Dialer{Timeout: dialTimeout}).DialContext(ctx, "tcp", address)
+	if err != nil {
+		return fmt.Errorf("tcp probe %s: %w", address, err)
+	}
+	_ = conn.Close()
 	return nil
 }
 
@@ -159,61 +262,47 @@ func buildPushEventsRequest(events []Event) (*vectorpb.PushEventsRequest, error)
 	return request, nil
 }
 
-// clientForAddress returns cached gRPC client or dials and stores a new one.
-// Params: ctx lifecycle context; address destination host:port; timeout dial timeout.
-// Returns: reusable Vector gRPC client or error.
-func (s *VectorGRPCSender) clientForAddress(
-	ctx context.Context,
-	address string,
-	timeout time.Duration,
-) (vectorpb.VectorClient, error) {
+// connForAddress returns cached gRPC connection or creates a lazy non-blocking one.
+// Params: address destination host:port.
+// Returns: shared client connection or error.
+func (s *VectorGRPCSender) connForAddress(address string) (*grpc.ClientConn, error) {
 	s.mu.RLock()
-	if client, ok := s.clients[address]; ok {
+	if conn, ok := s.conns[address]; ok {
 		s.mu.RUnlock()
-		return client, nil
+		return conn, nil
 	}
 	s.mu.RUnlock()
 
-	dialCtx := ctx
-	if timeout > 0 {
-		var cancel context.CancelFunc
-		dialCtx, cancel = context.WithTimeout(ctx, timeout)
-		defer cancel()
-	}
-
-	conn, err := grpc.DialContext(
-		dialCtx,
+	conn, err := grpc.NewClient(
 		address,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
-		grpc.WithBlock(),
+		grpc.WithKeepaliveParams(keepalive.ClientParameters{
+			Time:                30 * time.Second,
+			Timeout:             10 * time.Second,
+			PermitWithoutStream: true,
+		}),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("dial %s: %w", address, err)
 	}
 
-	client := vectorpb.NewVectorClient(conn)
-
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.clients == nil {
-		s.clients = make(map[string]vectorpb.VectorClient)
-	}
 	if s.conns == nil {
 		s.conns = make(map[string]*grpc.ClientConn)
 	}
 	if s.localIP == nil {
 		s.localIP = make(map[string]string)
 	}
-	if cached, exists := s.clients[address]; exists {
+	if cached, exists := s.conns[address]; exists {
 		_ = conn.Close()
 		return cached, nil
 	}
-	s.clients[address] = client
 	s.conns[address] = conn
-	return client, nil
+	return conn, nil
 }
 
-// dropAddress removes cached client/connection for one address.
+// dropAddress removes cached connection for one address.
 // Params: address destination host:port.
 // Returns: none.
 func (s *VectorGRPCSender) dropAddress(address string) {
@@ -225,52 +314,8 @@ func (s *VectorGRPCSender) dropAddress(address string) {
 		return
 	}
 	delete(s.conns, address)
-	delete(s.clients, address)
 	delete(s.localIP, address)
 	_ = conn.Close()
-}
-
-// localIPForAddress resolves and caches local source IP for destination address.
-// Params: address destination host:port; timeout dial timeout.
-// Returns: local source IP or error.
-func (s *VectorGRPCSender) localIPForAddress(ctx context.Context, address string, timeout time.Duration) (string, error) {
-	s.mu.RLock()
-	if ip, ok := s.localIP[address]; ok {
-		s.mu.RUnlock()
-		return ip, nil
-	}
-	s.mu.RUnlock()
-
-	dialTimeout := timeout
-	if dialTimeout <= 0 {
-		dialTimeout = 5 * time.Second
-	}
-
-	dialCtx, cancel := context.WithTimeout(ctx, dialTimeout)
-	defer cancel()
-
-	conn, err := (&net.Dialer{Timeout: dialTimeout}).DialContext(dialCtx, "tcp", address)
-	if err != nil {
-		return "", fmt.Errorf("resolve local ip for %s: %w", address, err)
-	}
-	defer conn.Close()
-
-	localAddr, ok := conn.LocalAddr().(*net.TCPAddr)
-	if !ok || localAddr.IP == nil {
-		return "", fmt.Errorf("resolve local ip for %s: unexpected local addr", address)
-	}
-	ip := localAddr.IP.String()
-
-	s.mu.Lock()
-	if s.localIP == nil {
-		s.localIP = make(map[string]string)
-	}
-	if _, exists := s.localIP[address]; !exists {
-		s.localIP[address] = ip
-	}
-	s.mu.Unlock()
-
-	return ip, nil
 }
 
 // injectHostIP adds host_ip field to all log events in request.

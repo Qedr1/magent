@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sync/atomic"
 	"time"
 
 	"magent/internal/match"
@@ -34,8 +35,9 @@ type WorkerConfig struct {
 type EmitFilter func(key string, seriesMap map[string]series) bool
 
 type metricWorker struct {
-	cfg    WorkerConfig
-	window *window
+	cfg          WorkerConfig
+	window       *window
+	scrapeErrors atomic.Uint64
 }
 
 // run executes scrape/send loops until context cancellation.
@@ -70,6 +72,7 @@ func (w *metricWorker) scrapeOnce(ctx context.Context) {
 
 	points, err := w.cfg.Collector.Scrape(ctx)
 	if err != nil {
+		w.scrapeErrors.Add(1)
 		w.window.cfg.Logger.Error(
 			"scrape failed",
 			slog.String("metric", w.cfg.Metric),

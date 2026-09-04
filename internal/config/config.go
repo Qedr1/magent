@@ -19,6 +19,13 @@ const (
 	defaultCollectorRetry  = 3 * time.Second
 	defaultCollectorBatchN = 200
 	defaultCollectorBatchA = 5 * time.Second
+	defaultCollectorHealth = 3 * time.Second
+
+	collectorOverflowBlock      = "block"
+	collectorOverflowDropOldest = "drop_oldest"
+
+	collectorCompressionNone = "none"
+	collectorCompressionGzip = "gzip"
 	defaultScriptTimeout   = 5 * time.Second
 	defaultHTTPTimeout     = 5 * time.Second
 	defaultHTTPMaxPending  = 4096
@@ -250,12 +257,15 @@ type NetflowWorkerConfig struct {
 // Params: collector endpoints, retry/batch/queue settings.
 // Returns: one collector runtime config.
 type CollectorConfig struct {
-	Name          string               `toml:"name"`
-	Addr          []string             `toml:"addr"`
-	Timeout       Duration             `toml:"timeout"`
-	RetryInterval Duration             `toml:"retry_interval"`
-	Queue         CollectorQueueConfig `toml:"queue"`
-	Batch         CollectorBatchConfig `toml:"batch"`
+	Name           string               `toml:"name"`
+	Addr           []string             `toml:"addr"`
+	Timeout        Duration             `toml:"timeout"`
+	RetryInterval  Duration             `toml:"retry_interval"`
+	HealthInterval Duration             `toml:"health_interval"`
+	Overflow       string               `toml:"overflow"`
+	Compression    string               `toml:"compression"`
+	Queue          CollectorQueueConfig `toml:"queue"`
+	Batch          CollectorBatchConfig `toml:"batch"`
 }
 
 // CollectorQueueConfig defines disk queue limits.
@@ -274,6 +284,20 @@ type CollectorQueueConfig struct {
 type CollectorBatchConfig struct {
 	MaxEvents uint64   `toml:"max_events"`
 	MaxAge    Duration `toml:"max_age"`
+}
+
+// OverflowDropOldest reports whether input buffer overflow evicts oldest events.
+// Params: receiver collector config.
+// Returns: true when overflow=drop_oldest.
+func (c CollectorConfig) OverflowDropOldest() bool {
+	return c.Overflow == collectorOverflowDropOldest
+}
+
+// CompressionGzip reports whether gRPC payloads are sent with gzip compression.
+// Params: receiver collector config.
+// Returns: true when compression=gzip.
+func (c CollectorConfig) CompressionGzip() bool {
+	return c.Compression == collectorCompressionGzip
 }
 
 // Load reads, expands, validates, and returns config from path.
@@ -398,6 +422,11 @@ func (c *Config) applyDefaults() error {
 		if c.Collector[i].Batch.MaxAge.Duration <= 0 {
 			c.Collector[i].Batch.MaxAge.Duration = defaultCollectorBatchA
 		}
+		if c.Collector[i].HealthInterval.Duration <= 0 {
+			c.Collector[i].HealthInterval.Duration = defaultCollectorHealth
+		}
+		c.Collector[i].Overflow = lowerOrDefault(c.Collector[i].Overflow, collectorOverflowBlock)
+		c.Collector[i].Compression = lowerOrDefault(c.Collector[i].Compression, collectorCompressionNone)
 	}
 
 	if strings.TrimSpace(c.DB.ClickHouse.Host) == "" {
@@ -492,6 +521,15 @@ func (c *Config) validate() error {
 		}
 		if collector.RetryInterval.Duration <= 0 {
 			return fmt.Errorf("%s.retry_interval must be > 0", path)
+		}
+		if collector.HealthInterval.Duration <= 0 {
+			return fmt.Errorf("%s.health_interval must be > 0", path)
+		}
+		if collector.Overflow != collectorOverflowBlock && collector.Overflow != collectorOverflowDropOldest {
+			return fmt.Errorf("%s.overflow must be %q or %q", path, collectorOverflowBlock, collectorOverflowDropOldest)
+		}
+		if collector.Compression != collectorCompressionNone && collector.Compression != collectorCompressionGzip {
+			return fmt.Errorf("%s.compression must be %q or %q", path, collectorCompressionNone, collectorCompressionGzip)
 		}
 
 		if collector.Batch.MaxEvents == 0 && collector.Batch.MaxAge.Duration <= 0 {
